@@ -1,0 +1,9 @@
+{
+  "ansible.python.interpreterPath": "/bin/python",
+  "python.analysis.autoImportCompletions": true,
+  "cSpell.words": ["downsampling"],
+
+  "rust-analyzer.server.extraEnv": {
+    "CMAKE": "/n/sw/helmod-rocky8/apps/Core/cmake/4.1.1-fasrc01/bin/cmake"
+  }
+}

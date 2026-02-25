@@ -1,0 +1,14 @@
+[workspace]
+members = ["core", "py", "matlab"]
+resolver = "3"
+
+[workspace.dependencies]
+log = "0.4.29"
+
+
+# Necessary for matlab bindings to work.
+[profile.dev]
+panic = "unwind"
+
+[profile.release]
+panic = "unwind"

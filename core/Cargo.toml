@@ -1,0 +1,14 @@
+[package]
+name = "arcfile-rs"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bitflags = { version = "2.11.0", features = ["std"] }
+byteorder = "1.5.0"
+bzip2 = "0.6.1"
+env_logger = "0.11.9"
+flate2 = { version = "1.1.9", default-features = false, features = ["zlib-ng"] }
+rayon = "1.11.0"
+thiserror = "2.0.18"
+log = { workspace = true }
