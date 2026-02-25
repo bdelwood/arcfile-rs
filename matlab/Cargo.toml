@@ -1,0 +1,13 @@
+[package]
+name = "arcfile-matlab"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+arcfile-rs = { path = "../core" }
+# rustmex = { version = "0.6.3", features = ["matlab800"] }
+rustmex = { path = "../../../gitlab/rustmex/rustmex", features = ["matlab800"] }
+log = { workspace = true }
