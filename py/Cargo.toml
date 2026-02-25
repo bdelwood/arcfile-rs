@@ -1,0 +1,15 @@
+[package]
+name = "arcfile-py"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "arcfile"
+crate-type = ["cdylib"]
+
+[dependencies]
+arcfile-rs = { path = "../core" }
+numpy = "0.28.0"
+pyo3 = { version = "0.28.2", features = ["extension-module"] }
+pyo3-log = "0.13.3"
+log = { workspace = true }
