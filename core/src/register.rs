@@ -1,7 +1,14 @@
 use crate::regmap::RegType;
 
+#[derive(Debug)]
+pub struct RegData {
+    pub data: RegValues,
+    pub nsamp: usize,
+    pub nchan: usize,
+}
+
 #[derive(Debug, Clone)]
-pub enum TypedRegData {
+pub enum RegValues {
     U8(Vec<u8>),
     I8(Vec<i8>),
     U16(Vec<u16>),
@@ -14,7 +21,7 @@ pub enum TypedRegData {
     Utc(Vec<[u32; 2]>),
 }
 
-impl TypedRegData {
+impl RegValues {
     /// Create an empty typed container for a given register type.
     pub fn empty(rt: RegType) -> Self {
         match rt {

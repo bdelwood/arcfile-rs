@@ -1,11 +1,11 @@
 use crate::error::{ArcError, ArcResult};
-use crate::register::TypedRegData;
+use crate::register::{RegData, RegValues};
 use crate::regmap::RegBlockSpec;
 use crate::regmap::{Endianness, parse_regmap};
 use bzip2::read::BzDecoder;
 use flate2::read::GzDecoder;
 use log::{debug, info};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::Path;
@@ -28,7 +28,7 @@ pub struct ArcFile {
 
 pub struct Register {
     pub spec: RegBlockSpec,
-    pub data: Option<TypedRegData>,
+    pub data: Option<RegData>,
 }
 
 #[repr(u32)]
@@ -133,7 +133,10 @@ fn read_header(reader: &mut dyn Read) -> ArcResult<ArcHeader> {
     })
 }
 
+type RegisterTree = BTreeMap<String, BTreeMap<String, BTreeMap<String, RegData>>>;
+
 impl ArcFile {
+    // TODO: add logs with time to open?
     pub fn open(path: &Path) -> ArcResult<Self> {
         info!("Opening arcfile.");
         // open reader
@@ -151,12 +154,13 @@ impl ArcFile {
 
         // Determine which registers to load
         // TODO: add filtering here
-        let archived: Vec<&RegBlockSpec> = regs.iter().filter(|r| r.do_arc()).collect();
-
-        // Create typed builders for each register
-        let mut builders: Vec<TypedRegData> = archived
-            .iter()
-            .map(|r| TypedRegData::empty(r.typeword.reg_type))
+        let mut archived: Vec<(RegBlockSpec, RegValues)> = regs
+            .into_iter()
+            .filter(|r| r.do_arc())
+            .map(|r| {
+                let builder = RegValues::empty(r.typeword.reg_type);
+                (r, builder)
+            })
             .collect();
 
         // read frames
@@ -167,28 +171,29 @@ impl ArcFile {
         // loop reader until EOF
         while Self::read_frame(reader.as_mut(), &mut frame_buf)? {
             // for each frame read loop over register and parse into concrete types
-            for (builder, reg) in builders.iter_mut().zip(archived.iter()) {
-                builder.push_frame(&frame_buf[reg.ofs..reg.ofs + reg.frame_size()]);
+            for (spec, builder) in archived.iter_mut() {
+                builder.push_frame(&frame_buf[spec.ofs..spec.ofs + spec.frame_size()]);
             }
             num_frames += 1;
         }
 
         // throw everything into a hashmap
         // keys=register full name, values=typed register data
-        let mut data_map: HashMap<String, TypedRegData> = archived
-            .iter()
-            .zip(builders)
-            .map(|(reg, builder)| (reg.full_name(), builder))
+        let registers: HashMap<String, Register> = archived
+            .into_iter()
+            .map(|(spec, data)| {
+                let nsamp = num_frames * spec.spf.max(1);
+                let nchan = spec.nchan;
+                (
+                    spec.full_name(),
+                    // TODO: both Register and RegData should probably have constructors
+                    Register {
+                        spec,
+                        data: Some(RegData { data, nsamp, nchan }),
+                    },
+                )
+            })
             .collect();
-
-        // copy C behavior: add empty registers to hashmap
-        let mut registers = HashMap::with_capacity(regs.len());
-
-        for spec in regs {
-            let name = spec.full_name();
-            let data = data_map.remove(&name);
-            registers.insert(name, Register { spec, data });
-        }
 
         // return ArcFile struct
         Ok(ArcFile {
@@ -196,6 +201,27 @@ impl ArcFile {
             num_frames,
             registers,
         })
+    }
+
+    pub fn into_tree(&mut self) -> RegisterTree {
+        let mut root = RegisterTree::new();
+
+        for (name, reg) in self.registers.iter_mut() {
+            let parts: Vec<&str> = name.split('.').collect();
+            // TODO: ignore registers which don't have map.board.block, should raise error
+            if parts.len() < 3 {
+                continue;
+            }
+
+            if let Some(data) = reg.data.take() {
+                root.entry(parts[0].to_string())
+                    .or_default()
+                    .entry(parts[1].to_string())
+                    .or_default()
+                    .insert(parts[2].to_string(), data);
+            }
+        }
+        root
     }
 
     fn read_frame(reader: &mut dyn Read, buf: &mut [u8]) -> ArcResult<bool> {
@@ -209,6 +235,7 @@ impl ArcFile {
         }
     }
 
+    // Methods for interfacing with flat register map
     pub fn get(&self, name: &str) -> Option<&Register> {
         self.registers.get(name)
     }
