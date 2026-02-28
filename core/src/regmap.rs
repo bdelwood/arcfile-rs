@@ -32,7 +32,7 @@ impl RegBlockSpec {
         // swaps nchan and spf based on fast flag?
         let (nchan, spf) = if typeword.flags.fast() && spf == 0 {
             (1, nchan)
-        } else if typeword.flags.fast() {
+        } else if !typeword.flags.fast() {
             (nchan, 1)
         } else {
             (nchan, spf)
