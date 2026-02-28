@@ -1,53 +1,43 @@
-use arcfile_rs::register::TypedRegData;
+use arcfile_rs::register::{RegData, RegValues};
 use log::{debug, info};
 use numpy::PyArray1;
 use pyo3::prelude::*;
-use pyo3_log;
+use pyo3::types::PyDict;
 
 // Take approach that bindings just implement the trait they need
 // to pass off the data from Rust.
 trait ToNumpy {
-    fn into_numpy<'py>(
-        self,
-        py: Python<'py>,
-        nrow: usize,
-        ncol: usize,
-    ) -> PyResult<Bound<'py, PyAny>>;
+    fn into_numpy<'py>(self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>>;
 }
 
-impl ToNumpy for TypedRegData {
-    fn into_numpy<'py>(
-        self,
-        py: Python<'py>,
-        nrow: usize,
-        ncol: usize,
-    ) -> PyResult<Bound<'py, PyAny>> {
+impl ToNumpy for RegData {
+    fn into_numpy<'py>(self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         macro_rules! make_array {
             ($v:expr) => {{
                 let arr = PyArray1::from_vec(py, $v).into_any();
-                if ncol == 1 {
+                if self.nchan == 1 {
                     Ok(arr)
                 } else {
-                    arr.call_method1("reshape", ((nrow, ncol),))
+                    arr.call_method1("reshape", ((self.nsamp, self.nchan),))
                 }
             }};
         }
 
-        match self {
-            Self::U8(v) => make_array!(v),
-            Self::I8(v) => make_array!(v),
-            Self::U16(v) => make_array!(v),
-            Self::I16(v) => make_array!(v),
-            Self::U32(v) => make_array!(v),
-            Self::I32(v) => make_array!(v),
-            Self::F32(v) => make_array!(v),
-            Self::F64(v) => make_array!(v),
+        match self.data {
+            RegValues::U8(v) => make_array!(v),
+            RegValues::I8(v) => make_array!(v),
+            RegValues::U16(v) => make_array!(v),
+            RegValues::I16(v) => make_array!(v),
+            RegValues::U32(v) => make_array!(v),
+            RegValues::I32(v) => make_array!(v),
+            RegValues::F32(v) => make_array!(v),
+            RegValues::F64(v) => make_array!(v),
             // TODO: check bool is implemented correctly
-            Self::Bool(v) => make_array!(v),
-            Self::Utc(v) => {
+            RegValues::Bool(v) => make_array!(v),
+            RegValues::Utc(v) => {
                 let flat: Vec<u32> = v.iter().flat_map(|p| *p).collect();
                 let arr = PyArray1::from_vec(py, flat);
-                arr.call_method1("reshape", ((nrow, 2 as usize),))
+                arr.call_method1("reshape", ((self.nsamp, 2 as usize),))
             }
         }
     }
@@ -56,80 +46,77 @@ impl ToNumpy for TypedRegData {
 #[pyo3::pymodule]
 mod arcfile {
     use super::*;
-    use pyo3::exceptions::{PyIOError, PyKeyError};
-
-    use std::path::PathBuf;
-
     use arcfile_rs::arcfile::ArcFile;
+    use pyo3::exceptions::{PyIOError, PyKeyError};
+    use std::path::PathBuf;
 
     #[pymodule_init]
     fn init(_m: &Bound<'_, PyModule>) -> PyResult<()> {
+        // set up logging
         pyo3_log::init();
         Ok(())
     }
 
     #[pyclass(name = "ArcFile")]
     struct PyArcFile {
+        #[pyo3(get)]
         path: PathBuf,
-        inner: Option<ArcFile>,
+        dict: Py<PyDict>,
     }
 
     #[pymethods]
     impl PyArcFile {
-        #[new]
-        fn new(path: PathBuf) -> Self {
-            Self { path, inner: None }
+        #[staticmethod]
+        fn open<'py>(py: Python<'py>, path: PathBuf) -> PyResult<Self> {
+            let mut af = ArcFile::open(&path).map_err(|e| PyIOError::new_err(e.to_string()))?;
+
+            // nested map
+            let regtree = af.into_tree();
+
+            // make top level dict
+            let map_dict = PyDict::new(py);
+            // loop over maps
+            for (map_name, boards) in regtree {
+                let board_dict = PyDict::new(py);
+                // loop over boards
+                for (board_name, blocks) in boards {
+                    let block_dict = PyDict::new(py);
+                    // loop over blocks
+                    for (block_name, data) in blocks {
+                        // extract and convert data to np array
+                        let arr = data.into_numpy(py)?;
+                        // fill in block dict item
+                        block_dict.set_item(&block_name, arr)?;
+                    }
+                    // fill in board dict item
+                    board_dict.set_item(&board_name, block_dict)?;
+                }
+                // fill in map dict item
+                map_dict.set_item(&map_name, board_dict)?;
+            }
+            Ok(Self {
+                path,
+                dict: map_dict.unbind(),
+            })
         }
 
-        fn open(&mut self) -> PyResult<()> {
-            let af = ArcFile::open(&self.path).map_err(|e| PyIOError::new_err(e.to_string()))?;
-            self.inner = Some(af);
-            Ok(())
+        fn to_dict<'py>(&self, py: Python<'py>) -> Bound<'py, PyDict> {
+            self.dict.bind(py).clone()
         }
 
-        #[getter]
-        fn num_frames(&self) -> PyResult<usize> {
-            Ok(self.inner()?.num_frames)
+        fn __getitem__<'py>(&self, py: Python<'py>, name: &str) -> PyResult<Bound<'py, PyAny>> {
+            self.dict
+                .bind(py)
+                .get_item(name)?
+                .ok_or_else(|| PyErr::new::<PyKeyError, _>(name.to_string()))
         }
 
-        fn __getitem__<'py>(&mut self, py: Python<'py>, name: &str) -> PyResult<Bound<'py, PyAny>> {
-            let af = self.inner_mut()?;
-
-            // need to copy before mutable borrow of af
-            let num_frames = af.num_frames;
-
-            let reg = af
-                .get_mut(name)
-                .ok_or_else(|| PyKeyError::new_err(name.to_string()))?;
-
-            let data = reg
-                .data
-                .take()
-                .ok_or_else(|| PyKeyError::new_err(format!("{name} empty.")))?;
-
-            // handle converting types and passing off to numpy
-            data.into_numpy(py, num_frames * reg.spec.spf.max(1), reg.spec.nchan)
+        fn __len__<'py>(&self, py: Python<'py>) -> PyResult<usize> {
+            Ok(self.dict.bind(py).len())
         }
 
-        // TODO: probably some other helper methods and
-        // dunders we want, eg __len__
-        fn keys(&self) -> PyResult<Vec<&String>> {
-            Ok(self.inner()?.register_names())
-        }
-    }
-
-    // internal helpers impls for pulling actual arcfile struct
-    impl PyArcFile {
-        fn inner(&self) -> PyResult<&ArcFile> {
-            self.inner
-                .as_ref()
-                .ok_or_else(|| PyIOError::new_err("File not opened. Call .open() first."))
-        }
-
-        fn inner_mut(&mut self) -> PyResult<&mut ArcFile> {
-            self.inner
-                .as_mut()
-                .ok_or_else(|| PyIOError::new_err("File not opened. Call .open() first."))
+        fn keys<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+            Ok(self.dict.bind(py).call_method0("keys")?)
         }
     }
 }
