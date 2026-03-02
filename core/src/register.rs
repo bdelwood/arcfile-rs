@@ -1,10 +1,52 @@
-use crate::regmap::RegType;
+use crate::regmap::{RegBlockSpec, RegType};
 
 #[derive(Debug)]
 pub struct RegData {
-    pub data: RegValues,
-    pub nsamp: usize,
-    pub nchan: usize,
+    data: RegValues,
+    nsamp: usize,
+    nchan: usize,
+    channels: Option<Vec<usize>>,
+}
+
+impl RegData {
+    pub fn new(spec: &RegBlockSpec, channels: Option<Vec<usize>>) -> Self {
+        let nchan = channels.as_ref().map_or(spec.nchan, |ch| ch.len());
+        Self {
+            data: RegValues::empty(spec.typeword.reg_type),
+            nsamp: 0,
+            nchan,
+            channels,
+        }
+    }
+
+    pub fn nchan(&self) -> usize {
+        self.nchan
+    }
+
+    pub fn nsamp(&self) -> usize {
+        self.nsamp
+    }
+
+    pub fn data(self) -> RegValues {
+        self.data
+    }
+
+    pub fn push_frame(&mut self, bytes: &[u8], spec: &RegBlockSpec) {
+        match &self.channels {
+            None => self.data.push_raw(bytes),
+            Some(channels) => {
+                let bpe = spec.element_size();
+                let row_size = spec.nchan * bpe;
+                for t in 0..spec.spf.max(1) {
+                    for &ch in channels {
+                        let start = t * row_size + ch * bpe;
+                        self.data.push_raw(&bytes[start..start + bpe]);
+                    }
+                }
+            }
+        }
+        self.nsamp += spec.spf.max(1);
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -39,7 +81,7 @@ impl RegValues {
     }
 
     /// Append one frame's worth of raw bytes.
-    pub fn push_frame(&mut self, bytes: &[u8]) {
+    pub fn push_raw(&mut self, bytes: &[u8]) {
         match self {
             Self::U8(v) => v.extend_from_slice(bytes),
             Self::I8(v) => v.extend(bytes.iter().map(|&b| b as i8)),
