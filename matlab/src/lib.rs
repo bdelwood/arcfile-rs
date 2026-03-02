@@ -2,16 +2,52 @@ use rustmex::numeric::Numeric;
 use rustmex::prelude::*;
 use std::path::Path;
 
-use arcfile_rs::arcfile::ArcFile;
+use arcfile_rs::arcfile::ArcFileLoader;
 use arcfile_rs::register::{RegData, RegValues};
 use rustmex::MatlabClass;
+use rustmex::cell::CellArray;
 use rustmex::char::CharArray;
-
 use rustmex::structs::{ScalarStruct, Struct};
 use std::ffi::CStr;
 use std::ffi::CString;
 
 use std::time::Instant;
+
+use jiff::{Timestamp, civil::DateTime, tz::TimeZone};
+
+use log::{LevelFilter, Log, Metadata, Record, debug, info};
+
+// It's annoying to use eprintln, println, etc throughout
+// to get matlab
+// rustmex prelude includes println!
+// let's wire that up to log
+// by implementing our own logger
+struct MatLabLogger;
+
+impl Log for MatLabLogger {
+    fn enabled(&self, _metadata: &Metadata) -> bool {
+        true
+    }
+
+    fn log(&self, record: &Record) {
+        if self.enabled(record.metadata()) {
+            println!("[{}] {}", record.level(), record.args());
+        }
+    }
+
+    fn flush(&self) {}
+}
+
+// static cause set_logger requires it to live forever
+static LOGGER: MatLabLogger = MatLabLogger;
+
+// quick helper to enable logging
+// TODO: make log level configurable
+fn init_logger() {
+    log::set_logger(&LOGGER)
+        .map(|()| log::set_max_level(LevelFilter::Debug))
+        .ok();
+}
 
 trait ToMex {
     fn into_mex(self) -> rustmex::Result<MxArray>;
@@ -22,9 +58,13 @@ impl ToMex for RegData {
         // basically make_array from Python bindings
         // with some extra care to handle errors, since we have
         // to handle these more explicitly with rustmex than with PyO3
+        let nchan = self.nchan();
+        let nsamp = self.nsamp();
+        let data = self.data();
+
         macro_rules! make_numeric {
             ($v:expr) => {{
-                let mx = Numeric::new($v.into_boxed_slice(), &[self.nsamp, self.nchan]).map_err(
+                let mx = Numeric::new($v.into_boxed_slice(), &[nsamp, nchan]).map_err(
                     |_| -> rustmex::Error {
                         rustmex::message::AdHoc("readarc:alloc", "Failed to create array").into()
                     },
@@ -35,7 +75,7 @@ impl ToMex for RegData {
         }
 
         // row-major...
-        match self.data {
+        match data {
             RegValues::U8(v) => make_numeric!(v),
             RegValues::I8(v) => make_numeric!(v),
             RegValues::U16(v) => make_numeric!(v),
@@ -79,13 +119,14 @@ fn make_scalar_struct<'a, K: Iterator<Item = &'a String>>(
 ) -> rustmex::Result<ScalarStruct<MxArray>> {
     let cstring: Vec<CString> = keys
         .map(|k| to_cstring(&k))
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<std::result::Result<Vec<_>, _>>()?;
     let refs: Vec<&CStr> = cstring.iter().map(|s| s.as_c_str()).collect();
     Ok(Struct::new(&[1, 1], &refs).into_scalar().unwrap())
 }
 
-#[rustmex::entrypoint]
+#[rustmex::entrypoint(catch_panic)]
 fn readarc_rs(lhs: Lhs, rhs: Rhs) -> rustmex::Result<()> {
+    init_logger();
     // Get filename as char array.
     // We'll convert it to a String
     let filename_mx = rhs
@@ -99,16 +140,68 @@ fn readarc_rs(lhs: Lhs, rhs: Rhs) -> rustmex::Result<()> {
     // Convert char to cstring to String
     let filename: String = filename_char.get_cstring().to_string_lossy().into_owned();
 
-    // Open and parse
-    let t0 = Instant::now();
+    // way more complicated than it should be
+    // but to match C impl we have to accept single char arrays and cells of char arrays
+    let filters: Vec<String> = match rhs.get(3) {
+        // nothing passed, just get empty vec
+        None => vec![],
+        // get mx object if user passed 3rd arg
+        Some(mx) => {
+            let mx = *mx;
+            // check if it's a cell
+            if let Ok(cell) = CellArray::from_mx_array(mx) {
+                // it's a cell array
+                // loop through elements
+                (0..cell.numel())
+                    // unwrap options, skips cell elements that are empty
+                    .flat_map(|i| cell.get(i).ok().flatten())
+                    // convert char arrays inside to strings
+                    .map(|item| {
+                        let chars = CharArray::from_mx_array(item).map_err(|_| {
+                            rustmex::message::AdHoc(
+                                "readarc:bad_filter",
+                                "Cell elements must be strings.",
+                            )
+                        })?;
+                        Ok(chars.get_cstring().to_string_lossy().into_owned())
+                    })
+                    // mush into a vec of strings
+                    .collect::<std::result::Result<Vec<_>, rustmex::Error>>()?
+            // try to convert to char array
+            } else if let Ok(chars) = CharArray::from_mx_array(mx) {
+                // it's a char array
+                // just directly return a Vec<String>
+                vec![chars.get_cstring().to_string_lossy().into_owned()]
+            // bad input
+            } else {
+                return Err(rustmex::message::AdHoc(
+                    "readarc:bad_filter",
+                    "Filter must be char or cell array.",
+                )
+                .into());
+            }
+        }
+    };
+    // borrow all the Strings
+    let filters_ref: Vec<&str> = filters.iter().map(String::as_str).collect();
 
-    let mut af = ArcFile::open(Path::new(&filename))
+    // Open and parse
+    let t_open = Instant::now();
+
+    // TODO: handle these as args, ie rhs.get(1), rhs.get(2)
+    let t1 = Timestamp::MIN;
+    let t2 = Timestamp::MAX;
+
+    let loader = ArcFileLoader::new(t1..=t2, &filters_ref).map_err(|e| {
+        rustmex::message::AdHoc("readarc:loader", format!("Failed to make loader: {e}"))
+    })?;
+    let mut af = loader
+        .open(&[Path::new(&filename).to_path_buf()])
         .map_err(|e| rustmex::message::AdHoc("readarc:open", format!("Failed to open: {e}")))?;
 
-    // TODO: replace with proper logging
-    eprintln!("Open: {:?}", t0.elapsed());
+    debug!("Open: {:?}", t_open.elapsed());
 
-    let t1 = Instant::now();
+    let t_convert = Instant::now();
 
     // Like Python bindings:
     // avoid copying, prefer to have mex take ownership
@@ -145,7 +238,7 @@ fn readarc_rs(lhs: Lhs, rhs: Rhs) -> rustmex::Result<()> {
         ret.replace(map_struct.into_inner());
     }
 
-    eprintln!("Convert: {:?}", t1.elapsed());
+    debug!("Convert: {:?}", t_convert.elapsed());
 
     Ok(())
 }
