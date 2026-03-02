@@ -1,4 +1,6 @@
+use arcfile_rs::arcfile::ArcFileLoader;
 use arcfile_rs::register::{RegData, RegValues};
+use jiff::{Timestamp, civil::DateTime, tz::TimeZone};
 use log::{debug, info};
 use numpy::PyArray1;
 use pyo3::prelude::*;
@@ -12,18 +14,22 @@ trait ToNumpy {
 
 impl ToNumpy for RegData {
     fn into_numpy<'py>(self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let nchan = self.nchan();
+        let nsamp = self.nsamp();
+        let data = self.data();
+
         macro_rules! make_array {
             ($v:expr) => {{
                 let arr = PyArray1::from_vec(py, $v).into_any();
-                if self.nchan == 1 {
+                if nchan == 1 {
                     Ok(arr)
                 } else {
-                    arr.call_method1("reshape", ((self.nsamp, self.nchan),))
+                    arr.call_method1("reshape", ((nsamp, nchan),))
                 }
             }};
         }
 
-        match self.data {
+        match data {
             RegValues::U8(v) => make_array!(v),
             RegValues::I8(v) => make_array!(v),
             RegValues::U16(v) => make_array!(v),
@@ -37,7 +43,7 @@ impl ToNumpy for RegData {
             RegValues::Utc(v) => {
                 let flat: Vec<u32> = v.iter().flat_map(|p| *p).collect();
                 let arr = PyArray1::from_vec(py, flat);
-                arr.call_method1("reshape", ((self.nsamp, 2 as usize),))
+                arr.call_method1("reshape", ((nsamp, 2 as usize),))
             }
         }
     }
@@ -46,7 +52,6 @@ impl ToNumpy for RegData {
 #[pyo3::pymodule]
 mod arcfile {
     use super::*;
-    use arcfile_rs::arcfile::ArcFile;
     use pyo3::exceptions::{PyIOError, PyKeyError};
     use std::path::PathBuf;
 
@@ -60,15 +65,43 @@ mod arcfile {
     #[pyclass(name = "ArcFile")]
     struct PyArcFile {
         #[pyo3(get)]
-        path: PathBuf,
+        paths: Vec<PathBuf>,
         dict: Py<PyDict>,
     }
 
     #[pymethods]
     impl PyArcFile {
         #[staticmethod]
-        fn open<'py>(py: Python<'py>, path: PathBuf) -> PyResult<Self> {
-            let mut af = ArcFile::open(&path).map_err(|e| PyIOError::new_err(e.to_string()))?;
+        #[pyo3(signature = (path, filters=None))]
+        fn open<'py>(
+            py: Python<'py>,
+            path: Bound<'py, PyAny>,
+            filters: Option<Vec<String>>,
+        ) -> PyResult<Self> {
+            // parse paths
+            let paths: Vec<PathBuf> = if let Ok(s) = path.extract::<PathBuf>() {
+                vec![s]
+            } else if let Ok(v) = path.extract::<Vec<PathBuf>>() {
+                v
+            } else {
+                return Err(PyIOError::new_err(
+                    "path must be a string, a Path, a list of strings, or a list of Paths",
+                ));
+            };
+            let filters = filters.unwrap_or_default();
+            let filter_refs: Vec<&str> = filters.iter().map(|s| s.as_str()).collect();
+
+            // TODO: handle as args
+            let t1 = Timestamp::MIN;
+            let t2 = Timestamp::MAX;
+
+            let loader = ArcFileLoader::new(t1..=t2, &filter_refs)
+                .map_err(|e| PyIOError::new_err(e.to_string()))?;
+            let mut af = py.detach(|| {
+                loader
+                    .open(&paths)
+                    .map_err(|e| PyIOError::new_err(e.to_string()))
+            })?;
 
             // nested map
             let regtree = af.into_tree();
@@ -95,7 +128,7 @@ mod arcfile {
                 map_dict.set_item(&map_name, board_dict)?;
             }
             Ok(Self {
-                path,
+                paths,
                 dict: map_dict.unbind(),
             })
         }
