@@ -1,6 +1,6 @@
 // TODO:
-// implement timerange clipping
 // refactoring and cleanup
+// implement listarc
 
 use crate::error::{ArcError, ArcResult};
 use crate::register::RegData;
@@ -292,7 +292,7 @@ pub struct ArcFileLoader {
 }
 
 impl ArcFileLoader {
-    pub fn new(timerange: RangeInclusive<Timestamp>, filters: Vec<&str>) -> ArcResult<Self> {
+    pub fn new(timerange: RangeInclusive<Timestamp>, filters: &[&str]) -> ArcResult<Self> {
         let filters: Vec<FilterSpec> = filters
             .iter()
             .map(|f| f.parse())
@@ -300,15 +300,29 @@ impl ArcFileLoader {
         Ok(Self { filters, timerange })
     }
 
-    pub fn open_dir(&self, path: &Path) -> ArcResult<Vec<ArcFile>> {
-        let paths = list_and_sort(path, &self.timerange)?;
+    pub fn open(&self, paths: &[PathBuf]) -> ArcResult<ArcFile> {
+        // flatten paths
+        let paths: Vec<PathBuf> = paths
+            .iter()
+            .flat_map(|p| {
+                // if directory, list and sort, trim to within timerange
+                if p.is_dir() {
+                    list_and_sort(p, &self.timerange).unwrap_or_default()
+
+                // otherwise, for individual files, just stuff into Vec
+                // TODO: should trim on timerange here too
+                } else {
+                    vec![p.clone()]
+                }
+            })
+            .collect();
 
         let afs = paths
             .par_iter()
             .map(|p| ArcFile::open(&p, &self.filters))
             .collect::<ArcResult<Vec<_>>>()?;
 
-        Ok(afs)
+        Ok(ArcFile::concatenate(afs)?)
     }
 }
 
@@ -412,6 +426,28 @@ impl ArcFile {
             }
         }
         root
+    }
+
+    pub fn concatenate(files: Vec<Self>) -> ArcResult<Self> {
+        let mut files = files.into_iter();
+        let first = files.next().ok_or(ArcError::Format(format!("No files.")))?;
+
+        let header = first.header;
+        let mut registers = first.registers;
+
+        for af in files {
+            for (name, mut reg) in af.registers {
+                if let Some(data) = reg.data.take() {
+                    if let Some(existing) = registers.get_mut(&name) {
+                        if let Some(ref mut existing_data) = existing.data {
+                            existing_data.extend(data);
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(ArcFile { header, registers })
     }
 
     fn read_frame(reader: &mut dyn Read, buf: &mut [u8]) -> ArcResult<bool> {

@@ -47,6 +47,12 @@ impl RegData {
         }
         self.nsamp += spec.spf.max(1);
     }
+
+    pub fn extend(&mut self, other: Self) {
+        self.data.extend(other.data);
+
+        self.nsamp += other.nsamp;
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -123,5 +129,19 @@ impl RegValues {
                 ]
             })),
         }
+    }
+
+    pub fn extend(&mut self, other: Self) {
+        macro_rules! extend_data {
+            ($($variant:ident),*) => {
+                match (self, other) {
+                    $((Self::$variant(a), Self::$variant(b))=>a.extend(b),)*
+
+                    _=>{}
+                }
+            };
+        }
+
+        extend_data!(U8, I8, U16, I16, U32, I32, F32, F64, Bool, Utc);
     }
 }
