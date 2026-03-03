@@ -54,7 +54,8 @@ trait ToMex {
 }
 
 impl ToMex for RegData {
-    fn into_mex(self) -> rustmex::Result<MxArray> {
+    // TODO: Transpose to column-major; values are mixed up because we unpack RegValues as row major
+    fn into_mex(mut self) -> rustmex::Result<MxArray> {
         // basically make_array from Python bindings
         // with some extra care to handle errors, since we have
         // to handle these more explicitly with rustmex than with PyO3
@@ -87,17 +88,18 @@ impl ToMex for RegData {
             RegValues::Bool(v) => make_numeric!(v),
 
             // Utc is Vec<[u32; 2]>,
-            // ie pair per row
+            // However, Matlab expects (MJD, time of day) packed into a single uint64
+            // Matlab does something like
+            // tmp(1:2:end)  % odd indices = low word = MJD
+            // tmp(2:2:end)  % even indices = high word = time_of_day_ms
             RegValues::Utc(v) => {
                 let n = v.len();
+                let packed: Vec<u64> = v
+                    .iter()
+                    .map(|p| (p[0] as u64) | ((p[1] as u64) << 32))
+                    .collect();
 
-                // matlab column-major:
-                // first all of column 1, then all of column 2
-                let mut flat = Vec::<u32>::with_capacity(n * 2);
-                flat.extend(v.iter().map(|p| p[0]));
-                flat.extend(v.iter().map(|p| p[1]));
-
-                let mx = Numeric::new(flat.into_boxed_slice(), &[n, 2]).map_err(
+                let mx = Numeric::new(packed.into_boxed_slice(), &[n, 1]).map_err(
                     |_| -> rustmex::Error {
                         rustmex::message::AdHoc("readarc:alloc", "Failed to create array").into()
                     },
@@ -139,6 +141,42 @@ fn readarc_rs(lhs: Lhs, rhs: Rhs) -> rustmex::Result<()> {
 
     // Convert char to cstring to String
     let filename: String = filename_char.get_cstring().to_string_lossy().into_owned();
+
+    // Get requested time range
+    // C impl expects %Y-%b-%d:%T
+    let t1: Timestamp = if let Some(&t_mex) = rhs.get(1) {
+        let chars = CharArray::from_mx_array(t_mex).map_err(|_| {
+            rustmex::message::AdHoc("readarc:bad_time", "Time must be a char array")
+        })?;
+        let char_str = chars.get_cstring().to_string_lossy().into_owned();
+        let time = DateTime::strptime("%Y-%b-%d:%T", char_str).map_err(|e| {
+            rustmex::message::AdHoc("readarc:bad_time", format!("Unable to convert string, {e}"))
+        })?;
+        TimeZone::UTC
+            .to_timestamp(time)
+            .map_err(|_| rustmex::message::AdHoc("readarc:bad_time", "Unable to convert"))?
+    } else {
+        Timestamp::MIN
+    };
+
+    let t2: Timestamp = if let Some(&t_mex) = rhs.get(2) {
+        let chars = CharArray::from_mx_array(t_mex).map_err(|_| {
+            rustmex::message::AdHoc("readarc:bad_time", "Time must be a char array")
+        })?;
+        let char_str = chars.get_cstring().to_string_lossy().into_owned();
+
+        let time = DateTime::strptime("%Y-%b-%d:%T", char_str).map_err(|e| {
+            rustmex::message::AdHoc("readarc:bad_time", format!("Unable to convert string, {e}"))
+        })?;
+        TimeZone::UTC
+            .to_timestamp(time)
+            .map_err(|_| rustmex::message::AdHoc("readarc:bad_time", "Unable to convert"))?
+    } else {
+        Timestamp::MAX
+    };
+
+    debug!("t1: {:?}", t1);
+    debug!("t2: {:?}", t2);
 
     // way more complicated than it should be
     // but to match C impl we have to accept single char arrays and cells of char arrays
@@ -188,10 +226,6 @@ fn readarc_rs(lhs: Lhs, rhs: Rhs) -> rustmex::Result<()> {
     // Open and parse
     let t_open = Instant::now();
 
-    // TODO: handle these as args, ie rhs.get(1), rhs.get(2)
-    let t1 = Timestamp::MIN;
-    let t2 = Timestamp::MAX;
-
     let loader = ArcFileLoader::new(t1..=t2, &filters_ref).map_err(|e| {
         rustmex::message::AdHoc("readarc:loader", format!("Failed to make loader: {e}"))
     })?;
@@ -232,7 +266,7 @@ fn readarc_rs(lhs: Lhs, rhs: Rhs) -> rustmex::Result<()> {
         map_struct.set(to_cstring(&map_name)?.as_c_str(), board_struct.into_inner())?;
     }
 
-    // Write to first output
+    // Write to first output slot
     // if let Some because user may not have asked for first slot in assignment
     if let Some(ret) = lhs.get_mut(0) {
         ret.replace(map_struct.into_inner());
