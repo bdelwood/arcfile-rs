@@ -4,8 +4,7 @@
 
 use crate::error::{ArcError, ArcResult};
 use crate::register::RegData;
-use crate::regmap::RegBlockSpec;
-use crate::regmap::{Endianness, parse_regmap};
+use crate::regmap::{Endianness, RegBlockSpec, parse_regmap};
 use bzip2::read::BzDecoder;
 use flate2::read::GzDecoder;
 use jiff::{Timestamp, civil::DateTime, tz::TimeZone};
@@ -292,6 +291,7 @@ pub struct ArcFileLoader {
 }
 
 impl ArcFileLoader {
+    // TODO: handle defaults for time range and filters here or in ArcFile::open?
     pub fn new(timerange: RangeInclusive<Timestamp>, filters: &[&str]) -> ArcResult<Self> {
         let filters: Vec<FilterSpec> = filters
             .iter()
@@ -300,6 +300,7 @@ impl ArcFileLoader {
         Ok(Self { filters, timerange })
     }
 
+    // TODO: Rename to load?
     pub fn open(&self, paths: &[PathBuf]) -> ArcResult<ArcFile> {
         // flatten paths
         let paths: Vec<PathBuf> = paths
@@ -350,7 +351,7 @@ impl ArcFile {
             .filter(|spec| spec.do_arc())
             // skip registers not matched by user provided filter
             .filter(|spec| filters.is_empty() || filters.iter().any(|f| f.matches(&spec)))
-            // map register to (register, value) tuple
+            // map register to (register specification, register data) tuple
             .map(|spec| {
                 let channels = filters
                     .iter()
@@ -363,7 +364,7 @@ impl ArcFile {
             })
             .collect();
 
-        // read frames
+        //// read frames
         // make buffer
         let mut frame_buf = vec![0u8; header.frame_len];
 
@@ -377,7 +378,7 @@ impl ArcFile {
         }
 
         // throw everything into a hashmap
-        // keys=register full name, values=typed register data
+        // keys=register full name, values=Register struct (spec+data)
         let registers: HashMap<String, Register> = archived
             .into_iter()
             .map(|(spec, reg_data)| {
@@ -395,13 +396,13 @@ impl ArcFile {
         // return ArcFile struct
         let af = ArcFile { header, registers };
 
-        debug!("{:?}", af.register_names());
+        // debug!("{:?}", af.register_names());
 
-        for (name, reg) in &af.registers {
-            if let Some(ref data) = reg.data {
-                debug!("{}: nchan={}", name, data.nchan());
-            }
-        }
+        // for (name, reg) in &af.registers {
+        //     if let Some(ref data) = reg.data {
+        //         debug!("{}: nchan={}", name, data.nchan());
+        //     }
+        // }
 
         Ok(af)
     }
@@ -409,6 +410,7 @@ impl ArcFile {
     pub fn into_tree(&mut self) -> RegisterTree {
         let mut root = RegisterTree::new();
 
+        // Loop over register hashmap items
         for (name, reg) in self.registers.iter_mut() {
             let parts: Vec<&str> = name.split('.').collect();
             // ignore registers which don't have map.board.block
@@ -417,6 +419,7 @@ impl ArcFile {
                 continue;
             }
 
+            // extract actual data and build nested BTreeMap
             if let Some(data) = reg.data.take() {
                 root.entry(parts[0].to_string())
                     .or_default()

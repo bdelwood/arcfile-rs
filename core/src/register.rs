@@ -137,7 +137,7 @@ impl RegValues {
                 match (self, other) {
                     $((Self::$variant(a), Self::$variant(b))=>a.extend(b),)*
 
-                    _=>{}
+                    _ => {}
                 }
             };
         }
