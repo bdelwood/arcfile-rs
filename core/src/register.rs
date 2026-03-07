@@ -32,20 +32,25 @@ impl RegData {
     }
 
     pub fn push_frame(&mut self, bytes: &[u8], spec: &RegBlockSpec) {
+        let spf = spec.spf.max(1);
+        let bpe = spec.element_size();
+
         match &self.channels {
             None => self.data.push_raw(bytes),
             Some(channels) => {
-                let bpe = spec.element_size();
-                let row_size = spec.nchan * bpe;
-                for t in 0..spec.spf.max(1) {
+                // channels are outer, samples are inner, ie
+                // [ch0_s0, ch0_s1, ..., ch1_s0, ch1_s1, ...]
+                // We need to properly skip over channels we're filtering out
+                let chan_stride = spf * bpe;
+                for t in 0..spf {
                     for &ch in channels {
-                        let start = t * row_size + ch * bpe;
+                        let start = ch * chan_stride + t * bpe;
                         self.data.push_raw(&bytes[start..start + bpe]);
                     }
                 }
             }
         }
-        self.nsamp += spec.spf.max(1);
+        self.nsamp += spf;
     }
 
     pub fn extend(&mut self, other: Self) {
