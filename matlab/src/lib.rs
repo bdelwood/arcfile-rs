@@ -1,3 +1,6 @@
+mod error;
+mod logging;
+
 use rustmex::numeric::Numeric;
 use rustmex::prelude::*;
 use std::path::Path;
@@ -13,118 +16,10 @@ use std::ffi::CString;
 
 use std::time::Instant;
 
+use error::MexResult;
 use jiff::{Timestamp, civil::DateTime, tz::TimeZone};
-
-use log::{LevelFilter, Log, Metadata, Record, debug, info};
-
-// It's annoying to use eprintln, println, etc throughout
-// to get matlab
-// rustmex prelude includes println!
-// let's wire that up to log
-// by implementing our own logger
-struct MatLabLogger;
-
-impl Log for MatLabLogger {
-    fn enabled(&self, _metadata: &Metadata) -> bool {
-        true
-    }
-
-    fn log(&self, record: &Record) {
-        if self.enabled(record.metadata()) {
-            println!("[{}] {}", record.level(), record.args());
-        }
-    }
-
-    fn flush(&self) {}
-}
-
-// static cause set_logger requires it to live forever
-static LOGGER: MatLabLogger = MatLabLogger;
-
-// quick helper to enable logging
-// TODO: make log level configurable
-fn init_logger() {
-    log::set_logger(&LOGGER)
-        .map(|()| log::set_max_level(LevelFilter::Debug))
-        .ok();
-}
-
-trait ToMex {
-    fn into_mex(self) -> rustmex::Result<MxArray>;
-}
-
-impl ToMex for RegData {
-    // TODO: Transpose to column-major; values are mixed up because we unpack RegValues as row major
-    fn into_mex(mut self) -> rustmex::Result<MxArray> {
-        // basically make_array from Python bindings
-        // with some extra care to handle errors, since we have
-        // to handle these more explicitly with rustmex than with PyO3
-        let nchan = self.nchan();
-        let nsamp = self.nsamp();
-        let data = self.data();
-
-        macro_rules! make_numeric {
-            ($v:expr) => {{
-                let mx = Numeric::new($v.into_boxed_slice(), &[nsamp, nchan]).map_err(
-                    |_| -> rustmex::Error {
-                        rustmex::message::AdHoc("readarc:alloc", "Failed to create array").into()
-                    },
-                )?;
-
-                Ok(mx.into_inner())
-            }};
-        }
-
-        // row-major...
-        match data {
-            RegValues::U8(v) => make_numeric!(v),
-            RegValues::I8(v) => make_numeric!(v),
-            RegValues::U16(v) => make_numeric!(v),
-            RegValues::I16(v) => make_numeric!(v),
-            RegValues::U32(v) => make_numeric!(v),
-            RegValues::I32(v) => make_numeric!(v),
-            RegValues::F32(v) => make_numeric!(v),
-            RegValues::F64(v) => make_numeric!(v),
-            RegValues::Bool(v) => make_numeric!(v),
-
-            // Utc is Vec<[u32; 2]>,
-            // However, Matlab expects (MJD, time of day) packed into a single uint64
-            // Matlab does something like
-            // tmp(1:2:end)  % odd indices = low word = MJD
-            // tmp(2:2:end)  % even indices = high word = time_of_day_ms
-            RegValues::Utc(v) => {
-                let n = v.len();
-                let packed: Vec<u64> = v
-                    .iter()
-                    .map(|p| (p[0] as u64) | ((p[1] as u64) << 32))
-                    .collect();
-
-                let mx = Numeric::new(packed.into_boxed_slice(), &[n, 1]).map_err(
-                    |_| -> rustmex::Error {
-                        rustmex::message::AdHoc("readarc:alloc", "Failed to create array").into()
-                    },
-                )?;
-
-                Ok(mx.into_inner())
-            }
-        }
-    }
-}
-
-fn to_cstring(s: &str) -> rustmex::Result<CString> {
-    CString::new(s)
-        .map_err(|_| rustmex::message::AdHoc("readarc:cstring", "Name contains null byte").into())
-}
-
-fn make_scalar_struct<'a, K: Iterator<Item = &'a String>>(
-    keys: K,
-) -> rustmex::Result<ScalarStruct<MxArray>> {
-    let cstring: Vec<CString> = keys
-        .map(|k| to_cstring(&k))
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    let refs: Vec<&CStr> = cstring.iter().map(|s| s.as_c_str()).collect();
-    Ok(Struct::new(&[1, 1], &refs).into_scalar().unwrap())
-}
+use log::{debug, info};
+use logging::init_logger;
 
 #[rustmex::entrypoint(catch_panic)]
 fn readarc_rs(lhs: Lhs, rhs: Rhs) -> rustmex::Result<()> {
@@ -135,42 +30,22 @@ fn readarc_rs(lhs: Lhs, rhs: Rhs) -> rustmex::Result<()> {
         .get(0)
         .error_if_missing("readarc:no_file", "Missing filename")?;
 
-    let filename_char = CharArray::from_mx_array(filename_mx).map_err(|_| {
-        rustmex::message::AdHoc("readarc:bad_type", "Filename must be a char array")
-    })?;
+    let filename_char = CharArray::from_mx_array(filename_mx)
+        .mex_err("readarc:bad_type", "Filename must be a char array")?;
 
     // Convert char to cstring to String
     let filename: String = filename_char.get_cstring().to_string_lossy().into_owned();
 
     // Get requested time range
     // C impl expects %Y-%b-%d:%T
-    let t1: Timestamp = if let Some(&t_mex) = rhs.get(1) {
-        let chars = CharArray::from_mx_array(t_mex).map_err(|_| {
-            rustmex::message::AdHoc("readarc:bad_time", "Time must be a char array")
-        })?;
-        let char_str = chars.get_cstring().to_string_lossy().into_owned();
-        let time = DateTime::strptime("%Y-%b-%d:%T", char_str).map_err(|e| {
-            rustmex::message::AdHoc("readarc:bad_time", format!("Unable to convert string, {e}"))
-        })?;
-        TimeZone::UTC
-            .to_timestamp(time)
-            .map_err(|_| rustmex::message::AdHoc("readarc:bad_time", "Unable to convert"))?
+    let t1: Timestamp = if let Some(&ts_mex) = rhs.get(1) {
+        parse_timestamp(ts_mex)?
     } else {
         Timestamp::MIN
     };
 
-    let t2: Timestamp = if let Some(&t_mex) = rhs.get(2) {
-        let chars = CharArray::from_mx_array(t_mex).map_err(|_| {
-            rustmex::message::AdHoc("readarc:bad_time", "Time must be a char array")
-        })?;
-        let char_str = chars.get_cstring().to_string_lossy().into_owned();
-
-        let time = DateTime::strptime("%Y-%b-%d:%T", char_str).map_err(|e| {
-            rustmex::message::AdHoc("readarc:bad_time", format!("Unable to convert string, {e}"))
-        })?;
-        TimeZone::UTC
-            .to_timestamp(time)
-            .map_err(|_| rustmex::message::AdHoc("readarc:bad_time", "Unable to convert"))?
+    let t2: Timestamp = if let Some(&ts_mex) = rhs.get(2) {
+        parse_timestamp(ts_mex)?
     } else {
         Timestamp::MAX
     };
@@ -195,12 +70,8 @@ fn readarc_rs(lhs: Lhs, rhs: Rhs) -> rustmex::Result<()> {
                     .flat_map(|i| cell.get(i).ok().flatten())
                     // convert char arrays inside to strings
                     .map(|item| {
-                        let chars = CharArray::from_mx_array(item).map_err(|_| {
-                            rustmex::message::AdHoc(
-                                "readarc:bad_filter",
-                                "Cell elements must be strings.",
-                            )
-                        })?;
+                        let chars = CharArray::from_mx_array(item)
+                            .mex_err("readarc:bad_filter", "Cell elements must be strings.")?;
                         Ok(chars.get_cstring().to_string_lossy().into_owned())
                     })
                     // mush into a vec of strings
@@ -226,12 +97,11 @@ fn readarc_rs(lhs: Lhs, rhs: Rhs) -> rustmex::Result<()> {
     // Open and parse
     let t_open = Instant::now();
 
-    let loader = ArcFileLoader::new(t1..=t2, &filters_ref).map_err(|e| {
-        rustmex::message::AdHoc("readarc:loader", format!("Failed to make loader: {e}"))
-    })?;
+    let loader = ArcFileLoader::new(t1..=t2, &filters_ref)
+        .mex_err("readarc:loader", "Failed to make loader")?;
     let mut af = loader
         .open(&[Path::new(&filename).to_path_buf()])
-        .map_err(|e| rustmex::message::AdHoc("readarc:open", format!("Failed to open: {e}")))?;
+        .mex_err("readarc:open", "Failed to open")?;
 
     debug!("Open: {:?}", t_open.elapsed());
 
@@ -275,4 +145,88 @@ fn readarc_rs(lhs: Lhs, rhs: Rhs) -> rustmex::Result<()> {
     debug!("Convert: {:?}", t_convert.elapsed());
 
     Ok(())
+}
+
+// Conversion from Rust representation to Mex.
+trait ToMex {
+    fn into_mex(self) -> rustmex::Result<MxArray>;
+}
+
+impl ToMex for RegData {
+    // TODO: Transpose to column-major; values are mixed up because we unpack RegValues as row major
+    fn into_mex(mut self) -> rustmex::Result<MxArray> {
+        // basically make_array from Python bindings
+        // with some extra care to handle errors, since we have
+        // to handle these more explicitly with rustmex than with PyO3
+        let nchan = self.nchan();
+        let nsamp = self.nsamp();
+        let data = self.data();
+
+        macro_rules! make_numeric {
+            ($v:expr) => {{
+                let mx = Numeric::new($v.into_boxed_slice(), &[nsamp, nchan])
+                    .mex_err("readarc:alloc", "Failed to create array")?;
+
+                Ok(mx.into_inner())
+            }};
+        }
+
+        // row-major...
+        match data {
+            RegValues::U8(v) => make_numeric!(v),
+            RegValues::I8(v) => make_numeric!(v),
+            RegValues::U16(v) => make_numeric!(v),
+            RegValues::I16(v) => make_numeric!(v),
+            RegValues::U32(v) => make_numeric!(v),
+            RegValues::I32(v) => make_numeric!(v),
+            RegValues::F32(v) => make_numeric!(v),
+            RegValues::F64(v) => make_numeric!(v),
+            RegValues::Bool(v) => make_numeric!(v),
+
+            // Utc is Vec<[u32; 2]>,
+            // However, Matlab expects (MJD, time of day) packed into a single uint64
+            // Matlab does something like
+            // tmp(1:2:end)  % odd indices = low word = MJD
+            // tmp(2:2:end)  % even indices = high word = time_of_day_ms
+            RegValues::Utc(v) => {
+                let n = v.len();
+                let packed: Vec<u64> = v
+                    .iter()
+                    .map(|p| (p[0] as u64) | ((p[1] as u64) << 32))
+                    .collect();
+
+                let mx = Numeric::new(packed.into_boxed_slice(), &[n, 1])
+                    .mex_err("readarc:alloc", "Failed to create array")?;
+
+                Ok(mx.into_inner())
+            }
+        }
+    }
+}
+
+fn parse_timestamp(ts_mex: &mxArray) -> rustmex::Result<Timestamp> {
+    let chars = CharArray::from_mx_array(ts_mex)
+        .mex_err("readarc:bad_time", "Time must be a char array")?;
+    let char_str = chars.get_cstring().to_string_lossy().into_owned();
+    let time = DateTime::strptime("%Y-%b-%d:%T", char_str)
+        .mex_err("readarc:bad_time", "Unable to datetime string")?;
+    let ts = TimeZone::UTC
+        .to_timestamp(time)
+        .mex_err("readarc:bad_time", "Unable to convert")?;
+
+    Ok(ts)
+}
+
+fn to_cstring(s: &str) -> rustmex::Result<CString> {
+    Ok(CString::new(s).mex_err("readarc:cstring", "Name contains null byte")?)
+}
+
+fn make_scalar_struct<'a, K: Iterator<Item = &'a String>>(
+    keys: K,
+) -> rustmex::Result<ScalarStruct<MxArray>> {
+    let cstring: Vec<CString> = keys
+        .map(|k| to_cstring(&k))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let refs: Vec<&CStr> = cstring.iter().map(|s| s.as_c_str()).collect();
+    Ok(Struct::new(&[1, 1], &refs).into_scalar().unwrap())
 }
