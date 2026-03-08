@@ -24,6 +24,10 @@ use logging::init_logger;
 #[rustmex::entrypoint(catch_panic)]
 fn readarc_rs(lhs: Lhs, rhs: Rhs) -> rustmex::Result<()> {
     init_logger();
+    info!("readarc_rs called");
+
+    let t_total = Instant::now();
+
     // Get filename as char array.
     // We'll convert it to a String
     let filename_mx = rhs
@@ -35,6 +39,7 @@ fn readarc_rs(lhs: Lhs, rhs: Rhs) -> rustmex::Result<()> {
 
     // Convert char to cstring to String
     let filename: String = filename_char.get_cstring().to_string_lossy().into_owned();
+    debug!("Parsed filename: {}", filename);
 
     // Get requested time range
     // C impl expects %Y-%b-%d:%T
@@ -50,19 +55,21 @@ fn readarc_rs(lhs: Lhs, rhs: Rhs) -> rustmex::Result<()> {
         Timestamp::MAX
     };
 
-    debug!("t1: {:?}", t1);
-    debug!("t2: {:?}", t2);
-
+    debug!("Parsed time range: {:?}..={:?}", t1, t2);
     // way more complicated than it should be
     // but to match C impl we have to accept single char arrays and cells of char arrays
     let filters: Vec<String> = match rhs.get(3) {
-        // nothing passed, just get empty vec
-        None => vec![],
-        // get mx object if user passed 3rd arg
+        None => {
+            vec![]
+        }
         Some(mx) => {
             let mx = *mx;
-            // check if it's a cell
+
             if let Ok(cell) = CellArray::from_mx_array(mx) {
+                debug!(
+                    "Parsing filters from cell array with {} element(s)",
+                    cell.numel()
+                );
                 // it's a cell array
                 // loop through elements
                 (0..cell.numel())
@@ -78,6 +85,7 @@ fn readarc_rs(lhs: Lhs, rhs: Rhs) -> rustmex::Result<()> {
                     .collect::<std::result::Result<Vec<_>, rustmex::Error>>()?
             // try to convert to char array
             } else if let Ok(chars) = CharArray::from_mx_array(mx) {
+                debug!("Parsing single string filter");
                 // it's a char array
                 // just directly return a Vec<String>
                 vec![chars.get_cstring().to_string_lossy().into_owned()]
@@ -91,10 +99,11 @@ fn readarc_rs(lhs: Lhs, rhs: Rhs) -> rustmex::Result<()> {
             }
         }
     };
+    debug!("Parsed {} filter(s)", filters.len());
     // borrow all the Strings
     let filters_ref: Vec<&str> = filters.iter().map(String::as_str).collect();
 
-    // Open and parse
+    // Start timer for file open time
     let t_open = Instant::now();
 
     let loader = ArcFileLoader::new(t1..=t2, &filters_ref)
@@ -103,7 +112,10 @@ fn readarc_rs(lhs: Lhs, rhs: Rhs) -> rustmex::Result<()> {
         .open(&[Path::new(&filename).to_path_buf()])
         .mex_err("readarc:open", "Failed to open")?;
 
-    debug!("Open: {:?}", t_open.elapsed());
+    debug!(
+        "File open completed in {:.2}s",
+        t_open.elapsed().as_secs_f64()
+    );
 
     let t_convert = Instant::now();
 
@@ -111,7 +123,7 @@ fn readarc_rs(lhs: Lhs, rhs: Rhs) -> rustmex::Result<()> {
     // avoid copying, prefer to have mex take ownership
     let regtree = af.into_tree();
 
-    // make top level stuct
+    // make top level struct
     let mut map_struct = make_scalar_struct(regtree.keys())?;
     // loop over maps
     for (map_name, boards) in regtree {
@@ -132,17 +144,25 @@ fn readarc_rs(lhs: Lhs, rhs: Rhs) -> rustmex::Result<()> {
                 block_struct.into_inner(),
             )?;
         }
-        // fill in map strict
+        // fill in map struct
         map_struct.set(to_cstring(&map_name)?.as_c_str(), board_struct.into_inner())?;
     }
 
     // Write to first output slot
     // if let Some because user may not have asked for first slot in assignment
     if let Some(ret) = lhs.get_mut(0) {
+        debug!("Writing output to lhs[0]");
         ret.replace(map_struct.into_inner());
     }
 
-    debug!("Convert: {:?}", t_convert.elapsed());
+    debug!(
+        "MATLAB struct conversion completed in {:.2}s",
+        t_convert.elapsed().as_secs_f64()
+    );
+    info!(
+        "readarc_rs completed successfully in {:.2}s",
+        t_total.elapsed().as_secs_f64()
+    );
 
     Ok(())
 }
@@ -209,7 +229,7 @@ fn parse_timestamp(ts_mex: &mxArray) -> rustmex::Result<Timestamp> {
         .mex_err("readarc:bad_time", "Time must be a char array")?;
     let char_str = chars.get_cstring().to_string_lossy().into_owned();
     let time = DateTime::strptime("%Y-%b-%d:%T", char_str)
-        .mex_err("readarc:bad_time", "Unable to datetime string")?;
+        .mex_err("readarc:bad_time", "Unable to parse datetime string")?;
     let ts = TimeZone::UTC
         .to_timestamp(time)
         .mex_err("readarc:bad_time", "Unable to convert")?;
