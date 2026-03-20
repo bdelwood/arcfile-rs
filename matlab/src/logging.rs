@@ -1,7 +1,6 @@
 use log::{LevelFilter, Log, Metadata, Record};
 
 // It's annoying to use eprintln, println, etc throughout
-// to get matlab
 // rustmex prelude includes println!
 // let's wire that up to log
 // by implementing our own logger
@@ -25,9 +24,15 @@ impl Log for MatLabLogger {
 static LOGGER: MatLabLogger = MatLabLogger;
 
 // quick helper to enable logging
-// TODO: make log level configurable
 pub fn init_logger() {
-    log::set_logger(&LOGGER)
-        .map(|()| log::set_max_level(LevelFilter::Debug))
-        .ok();
+    let level = std::env::var("RUST_LOG")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(LevelFilter::Info);
+
+    // set_logger only succeeds once per process
+    let _ = log::set_logger(&LOGGER);
+
+    // Always update the level
+    log::set_max_level(level);
 }

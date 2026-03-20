@@ -427,13 +427,13 @@ impl ArcFileLoader {
             .map(|p| ArcFile::open(&p, &self.filters))
             .collect::<ArcResult<Vec<_>>>()?;
 
-        debug!("par_iter open: {:.2}s", t1.elapsed().as_secs_f64());
+        trace!("par_iter open: {:.2}s", t1.elapsed().as_secs_f64());
         let t2 = std::time::Instant::now();
 
         // merge individual arcfiles into one virtual arcfile
         let af = ArcFile::concatenate(afs)?;
 
-        debug!("concatenate: {:.2}s", t2.elapsed().as_secs_f64());
+        trace!("concatenate: {:.2}s", t2.elapsed().as_secs_f64());
 
         Ok(af)
     }
@@ -458,7 +458,7 @@ impl ArcFile {
         reader.read_exact(&mut regmap_buf)?;
         let regs = parse_regmap(&regmap_buf, header.endianness)?;
 
-        debug!(
+        trace!(
             "[{}] header + regmap: {:.2}s",
             fname,
             t0.elapsed().as_secs_f64()
@@ -468,7 +468,7 @@ impl ArcFile {
         // Estimate nframes from file size for pre-allocation.
         // trim at end if needed
         let nframes_est = estimate_nframes(path, &header);
-        debug!("[{}] estimated {} frames", fname, nframes_est);
+        trace!("[{}] estimated {} frames", fname, nframes_est);
 
         // Determine which registers to load and pre-allocate output buffers.
         let mut archived: Vec<(RegBlockSpec, RegData<Buffer>)> = regs
@@ -490,7 +490,7 @@ impl ArcFile {
             })
             .collect();
 
-        debug!(
+        trace!(
             "[{}] filter + alloc {} registers: {:.2}s",
             fname,
             archived.len(),
@@ -522,7 +522,7 @@ impl ArcFile {
             nframes += frames_read;
         }
 
-        debug!(
+        trace!(
             "[{}] read + scatter {} frames: {:.2}s",
             fname,
             nframes,
@@ -544,7 +544,7 @@ impl ArcFile {
             })
             .collect();
 
-        debug!(
+        trace!(
             "[{}] finish {} registers: {:.2}s",
             fname,
             registers.len(),

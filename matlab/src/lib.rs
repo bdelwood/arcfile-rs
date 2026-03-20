@@ -18,13 +18,13 @@ use std::time::Instant;
 
 use error::MexResult;
 use jiff::{Timestamp, civil::DateTime, tz::TimeZone};
-use log::{debug, info};
+use log::{debug, info, trace};
 use logging::init_logger;
 
 #[rustmex::entrypoint(catch_panic)]
 fn readarc_rs(lhs: Lhs, rhs: Rhs) -> rustmex::Result<()> {
     init_logger();
-    info!("readarc_rs called");
+    debug!("readarc_rs called");
 
     let t_total = Instant::now();
 
@@ -144,7 +144,7 @@ fn readarc_rs(lhs: Lhs, rhs: Rhs) -> rustmex::Result<()> {
     // avoid copying, prefer to have mex take ownership.
     let regtree = af.into_tree();
 
-    debug!("into_tree: {:.3}s", t_convert.elapsed().as_secs_f64());
+    trace!("into_tree: {:.3}s", t_convert.elapsed().as_secs_f64());
 
     let t_mx = Instant::now();
 
@@ -173,7 +173,7 @@ fn readarc_rs(lhs: Lhs, rhs: Rhs) -> rustmex::Result<()> {
         map_struct.set(to_cstring(&map_name)?.as_c_str(), board_struct.into_inner())?;
     }
 
-    debug!(
+    trace!(
         "MATLAB struct assembly: {:.3}s",
         t_mx.elapsed().as_secs_f64()
     );
@@ -181,7 +181,7 @@ fn readarc_rs(lhs: Lhs, rhs: Rhs) -> rustmex::Result<()> {
     // Write to first output slot
     // if let Some because user may not have asked for first slot in assignment
     if let Some(ret) = lhs.get_mut(0) {
-        debug!("Writing output to lhs[0]");
+        trace!("Writing output to lhs[0]");
         ret.replace(map_struct.into_inner());
     }
 
