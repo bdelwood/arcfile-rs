@@ -1,65 +1,191 @@
 use crate::regmap::{RegBlockSpec, RegType};
 
+/// Register data is generic over storage state.
+///
+/// `RegData<Buffer>`: a pre-allocated typed buffer
+/// that frames are scattered into during the read loop.
+///
+/// `RegData<RegValues>`: finalized typed column-major data.
+/// Created by `finish()` after all frames have been read.
 #[derive(Debug)]
-pub struct RegData {
-    data: RegValues,
-    nsamp: usize,
-    nchan: usize,
-    channels: Option<Vec<usize>>,
+pub struct RegData<S> {
+    pub nchan: usize,
+    pub nsamp: usize,
+    pub(crate) reg_type: RegType,
+    pub(crate) storage: S,
 }
 
-impl RegData {
-    pub fn new(spec: &RegBlockSpec, channels: Option<Vec<usize>>) -> Self {
-        let nchan = channels.as_ref().map_or(spec.nchan, |ch| ch.len());
+// essentially the on-disk format, loaded into memory
+#[derive(Debug)]
+pub(crate) struct Buffer {
+    data: RegValues,
+    spf: usize,
+    elem_size: usize,
+    reg_ofs: usize,
+    channels: Vec<usize>,
+    nframes_written: usize,
+    nframes_capacity: usize,
+}
+
+impl RegData<Buffer> {
+    /// Pre-allocate an output buffer for `nframes_est` frames.
+    /// For compressed files this may be an overestimate, which `finish()` trims.
+    /// If underestimated, `scatter_frame` grows by 2x as needed.
+    pub(crate) fn new(
+        spec: &RegBlockSpec,
+        channels: Option<Vec<usize>>,
+        nframes_est: usize,
+    ) -> Self {
+        let channels = channels.unwrap_or_else(|| (0..spec.nchan).collect());
+        let nchan = channels.len();
+        let spf = spec.spf.max(1);
+        let elem_size = spec.element_size();
+        let reg_type = spec.typeword.reg_type;
+
         Self {
-            data: RegValues::empty(spec.typeword.reg_type),
-            nsamp: 0,
             nchan,
-            channels,
+            nsamp: 0,
+            reg_type,
+            storage: Buffer {
+                data: RegValues::zeroed(reg_type, nframes_est * spf * nchan.max(1)),
+                spf,
+                elem_size,
+                reg_ofs: spec.ofs,
+                channels,
+                nframes_written: 0,
+                nframes_capacity: nframes_est,
+            },
         }
     }
 
-    pub fn nchan(&self) -> usize {
-        self.nchan
+    /// Scatter one frame's register data into the output buffer.
+    /// Grows the buffer if needed.
+    #[inline]
+    pub(crate) fn scatter_frame(&mut self, frame: &[u8]) {
+        if self.storage.nframes_written >= self.storage.nframes_capacity {
+            self.grow();
+        }
+
+        let buffer = &mut self.storage;
+        let elem = buffer.spf * buffer.elem_size;
+        let chan_stride = buffer.nframes_capacity * elem;
+        let offset = buffer.nframes_written * elem;
+
+        // Output layout is column-major: channels are outer, samples inner.
+        // [ch0_s0, ch0_s1, ..., ch1_s0, ch1_s1, ...]
+        // Selected channels may be non-contiguous in the frame,
+        // so we index into the frame by channel and copy each one
+        // into its contiguous column in the output buffer.
+        let out = buffer.data.as_bytes_mut();
+
+        for (col, &ch) in buffer.channels.iter().enumerate() {
+            let src = buffer.reg_ofs + ch * elem;
+            let dst = col * chan_stride + offset;
+            out[dst..dst + elem].copy_from_slice(&frame[src..src + elem]);
+        }
+
+        buffer.nframes_written += 1;
+        self.nsamp += buffer.spf;
     }
 
-    pub fn nsamp(&self) -> usize {
-        self.nsamp
+    /// Double the buffer capacity. Called by scatter_frame when full.
+    /// Should be an edge csase, but included for robustness
+    /// and to copy the behavior of the C implementation's `dataset_resize`
+    fn grow(&mut self) {
+        let buffer = &mut self.storage;
+        let nchan = self.nchan.max(1);
+        let old_spc = buffer.nframes_capacity * buffer.spf;
+        // set reasonable maximum
+        let new_spc = ((buffer.nframes_capacity * 2).max(64)) * buffer.spf;
+        let nsamp = buffer.nframes_written * buffer.spf;
+
+        // allocate and copy
+        let mut new_data = RegValues::zeroed(self.reg_type, new_spc * nchan);
+        new_data.copy_channels_from(&buffer.data, nchan, old_spc, new_spc, nsamp, 0);
+
+        buffer.data = new_data;
+        buffer.nframes_capacity = new_spc / buffer.spf;
     }
 
-    pub fn data(self) -> RegValues {
-        self.data
+    /// trim to actual size.
+    pub(crate) fn finish(self) -> RegData<RegValues> {
+        let buffer = self.storage;
+        let nchan = self.nchan.max(1);
+        let nsamp = self.nsamp;
+
+        // If buffer is larger than the actual number of frames:
+        // Allocate and copy to exact size
+        // If buffer is already the right size, simply move over register values into register data
+        let data = if buffer.nframes_written < buffer.nframes_capacity {
+            let src_spc = buffer.nframes_capacity * buffer.spf;
+            let mut trimmed = RegValues::zeroed(self.reg_type, nsamp * nchan);
+            trimmed.copy_channels_from(&buffer.data, nchan, src_spc, nsamp, nsamp, 0);
+            trimmed
+        } else {
+            buffer.data
+        };
+
+        RegData {
+            nchan: self.nchan,
+            nsamp,
+            reg_type: self.reg_type,
+            storage: data,
+        }
     }
+}
 
-    pub fn push_frame(&mut self, bytes: &[u8], spec: &RegBlockSpec) {
-        let spf = spec.spf.max(1);
-        let bpe = spec.element_size();
-
-        match &self.channels {
-            None => self.data.push_raw(bytes),
-            Some(channels) => {
-                // channels are outer, samples are inner, ie
-                // [ch0_s0, ch0_s1, ..., ch1_s0, ch1_s1, ...]
-                // We need to properly skip over channels we're filtering out
-                let chan_stride = spf * bpe;
-                for t in 0..spf {
-                    for &ch in channels {
-                        let start = ch * chan_stride + t * bpe;
-                        self.data.push_raw(&bytes[start..start + bpe]);
-                    }
-                }
+// public-facing interface
+// contains register values in column-major format
+impl RegData<RegValues> {
+    /// Consume and return the typed data.
+    /// Bool registers are converted from U8 here for use with the binding libraries
+    pub fn into_values(self) -> RegValues {
+        if self.reg_type == RegType::Bool {
+            if let RegValues::U8(bytes) = self.storage {
+                return RegValues::Bool(bytes.into_iter().map(|b| b != 0).collect());
             }
         }
-        self.nsamp += spf;
+        self.storage
     }
 
-    pub fn extend(&mut self, other: Self) {
-        self.data.extend(other.data);
+    /// Concatenate data from multiple files into a single RegData.
+    /// One allocation for the total size, then copies each file's
+    /// per-channel data into the correct position. Like C's approach
+    /// of pre-allocating for the total frame count.
+    pub(crate) fn concatenate(parts: Vec<Self>) -> Self {
+        assert!(!parts.is_empty());
+        let nchan = parts[0].nchan;
+        let nchan_max = nchan.max(1);
+        let reg_type = parts[0].reg_type;
+        let total_spc: usize = parts.iter().map(|p| p.nsamp).sum();
 
-        self.nsamp += other.nsamp;
+        let rt = parts[0].storage.reg_type();
+        let mut out = RegValues::zeroed(rt, total_spc * nchan_max);
+        let mut cursor: usize = 0;
+
+        for part in &parts {
+            let part_spc = part.nsamp;
+            out.copy_channels_from(
+                &part.storage,
+                nchan_max,
+                part_spc,
+                total_spc,
+                part_spc,
+                cursor,
+            );
+            cursor += part_spc;
+        }
+
+        Self {
+            nchan,
+            nsamp: total_spc,
+            reg_type,
+            storage: out,
+        }
     }
 }
 
+// typed data buffer
 #[derive(Debug, Clone)]
 pub enum RegValues {
     U8(Vec<u8>),
@@ -75,78 +201,103 @@ pub enum RegValues {
 }
 
 impl RegValues {
-    /// Create an empty typed container for a given register type.
-    pub fn empty(rt: RegType) -> Self {
+    /// Allocate a zeroed buffer. Bool maps to U8 (same element size).
+    fn zeroed(rt: RegType, n: usize) -> Self {
         match rt {
-            RegType::UChar => Self::U8(Vec::new()),
-            RegType::Char => Self::I8(Vec::new()),
-            RegType::Bool => Self::Bool(Vec::new()),
-            RegType::UShort => Self::U16(Vec::new()),
-            RegType::Short => Self::I16(Vec::new()),
-            RegType::UInt => Self::U32(Vec::new()),
-            RegType::Int => Self::I32(Vec::new()),
-            RegType::Float => Self::F32(Vec::new()),
-            RegType::Double => Self::F64(Vec::new()),
-            RegType::Utc => Self::Utc(Vec::new()),
+            RegType::UChar | RegType::Bool => Self::U8(vec![0; n]),
+            RegType::Char => Self::I8(vec![0; n]),
+            RegType::UShort => Self::U16(vec![0; n]),
+            RegType::Short => Self::I16(vec![0; n]),
+            RegType::UInt => Self::U32(vec![0; n]),
+            RegType::Int => Self::I32(vec![0; n]),
+            RegType::Float => Self::F32(vec![0.0; n]),
+            RegType::Double => Self::F64(vec![0.0; n]),
+            RegType::Utc => Self::Utc(vec![[0u32; 2]; n]),
         }
     }
 
-    /// Append one frame's worth of raw bytes.
-    pub fn push_raw(&mut self, bytes: &[u8]) {
+    /// Copy `nsamp` samples per channel from `src` into `self`,
+    /// where source and destination may have different total
+    /// samples-per-channel.
+    /// `dst_offset` is the sample offset within each destination channel.
+    fn copy_channels_from(
+        &mut self,
+        src: &RegValues,
+        nchan: usize,
+        src_spc: usize,
+        dst_spc: usize,
+        nsamp: usize,
+        dst_offset: usize,
+    ) {
+        let elem = src.element_size();
+        let src_bytes = src.as_bytes();
+        let dst_bytes = self.as_bytes_mut();
+        let src_chan_bytes = src_spc * elem;
+        let dst_chan_bytes = dst_spc * elem;
+        let copy_bytes = nsamp * elem;
+        let offset_bytes = dst_offset * elem;
+
+        for ch in 0..nchan {
+            dst_bytes[ch * dst_chan_bytes + offset_bytes
+                ..ch * dst_chan_bytes + offset_bytes + copy_bytes]
+                .copy_from_slice(&src_bytes[ch * src_chan_bytes..ch * src_chan_bytes + copy_bytes]);
+        }
+    }
+
+    fn element_size(&self) -> usize {
         match self {
-            Self::U8(v) => v.extend_from_slice(bytes),
-            Self::I8(v) => v.extend(bytes.iter().map(|&b| b as i8)),
-            Self::Bool(v) => v.extend(bytes.iter().map(|&b| b != 0)),
-            Self::U16(v) => v.extend(
-                bytes
-                    .chunks_exact(2)
-                    .map(|c| u16::from_le_bytes(c.try_into().unwrap())),
-            ),
-            Self::I16(v) => v.extend(
-                bytes
-                    .chunks_exact(2)
-                    .map(|c| i16::from_le_bytes(c.try_into().unwrap())),
-            ),
-            Self::U32(v) => v.extend(
-                bytes
-                    .chunks_exact(4)
-                    .map(|c| u32::from_le_bytes(c.try_into().unwrap())),
-            ),
-            Self::I32(v) => v.extend(
-                bytes
-                    .chunks_exact(4)
-                    .map(|c| i32::from_le_bytes(c.try_into().unwrap())),
-            ),
-            Self::F32(v) => v.extend(
-                bytes
-                    .chunks_exact(4)
-                    .map(|c| f32::from_le_bytes(c.try_into().unwrap())),
-            ),
-            Self::F64(v) => v.extend(
-                bytes
-                    .chunks_exact(8)
-                    .map(|c| f64::from_le_bytes(c.try_into().unwrap())),
-            ),
-            Self::Utc(v) => v.extend(bytes.chunks_exact(8).map(|c| {
-                [
-                    u32::from_le_bytes(c[..4].try_into().unwrap()),
-                    u32::from_le_bytes(c[4..].try_into().unwrap()),
-                ]
-            })),
+            Self::U8(_) | Self::I8(_) => 1,
+            Self::U16(_) | Self::I16(_) => 2,
+            Self::U32(_) | Self::I32(_) | Self::F32(_) => 4,
+            Self::F64(_) | Self::Utc(_) => 8,
+            Self::Bool(_) => unreachable!("Bool stored as U8 internally"),
         }
     }
 
-    pub fn extend(&mut self, other: Self) {
-        macro_rules! extend_data {
-            ($($variant:ident),*) => {
-                match (self, other) {
-                    $((Self::$variant(a), Self::$variant(b))=>a.extend(b),)*
-
-                    _ => {}
-                }
-            };
+    fn as_bytes_mut(&mut self) -> &mut [u8] {
+        use bytemuck::cast_slice_mut;
+        match self {
+            Self::U8(v) => v.as_mut_slice(),
+            Self::I8(v) => cast_slice_mut(v.as_mut_slice()),
+            Self::U16(v) => cast_slice_mut(v.as_mut_slice()),
+            Self::I16(v) => cast_slice_mut(v.as_mut_slice()),
+            Self::U32(v) => cast_slice_mut(v.as_mut_slice()),
+            Self::I32(v) => cast_slice_mut(v.as_mut_slice()),
+            Self::F32(v) => cast_slice_mut(v.as_mut_slice()),
+            Self::F64(v) => cast_slice_mut(v.as_mut_slice()),
+            Self::Utc(v) => cast_slice_mut(v.as_mut_slice()),
+            Self::Bool(_) => unreachable!("Bool stored as U8 internally"),
         }
+    }
 
-        extend_data!(U8, I8, U16, I16, U32, I32, F32, F64, Bool, Utc);
+    fn as_bytes(&self) -> &[u8] {
+        use bytemuck::cast_slice;
+        match self {
+            Self::U8(v) => v.as_slice(),
+            Self::I8(v) => cast_slice(v.as_slice()),
+            Self::U16(v) => cast_slice(v.as_slice()),
+            Self::I16(v) => cast_slice(v.as_slice()),
+            Self::U32(v) => cast_slice(v.as_slice()),
+            Self::I32(v) => cast_slice(v.as_slice()),
+            Self::F32(v) => cast_slice(v.as_slice()),
+            Self::F64(v) => cast_slice(v.as_slice()),
+            Self::Utc(v) => cast_slice(v.as_slice()),
+            Self::Bool(_) => unreachable!("Bool stored as U8 internally"),
+        }
+    }
+
+    fn reg_type(&self) -> RegType {
+        match self {
+            Self::U8(_) => RegType::UChar,
+            Self::I8(_) => RegType::Char,
+            Self::U16(_) => RegType::UShort,
+            Self::I16(_) => RegType::Short,
+            Self::U32(_) => RegType::UInt,
+            Self::I32(_) => RegType::Int,
+            Self::F32(_) => RegType::Float,
+            Self::F64(_) => RegType::Double,
+            Self::Bool(_) => RegType::Bool,
+            Self::Utc(_) => RegType::Utc,
+        }
     }
 }
