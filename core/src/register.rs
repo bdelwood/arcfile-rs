@@ -201,7 +201,7 @@ pub enum RegValues {
 }
 
 impl RegValues {
-    /// Allocate a zeroed buffer. Bool maps to U8 (same element size).
+    /// Allocate a zeroed buffer. Bool maps to U8.
     fn zeroed(rt: RegType, n: usize) -> Self {
         match rt {
             RegType::UChar | RegType::Bool => Self::U8(vec![0; n]),

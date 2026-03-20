@@ -37,7 +37,6 @@ impl ToNumpy for RegData<RegValues> {
             RegValues::I32(v) => make_array!(v),
             RegValues::F32(v) => make_array!(v),
             RegValues::F64(v) => make_array!(v),
-            // TODO: check bool is implemented correctly
             RegValues::Bool(v) => make_array!(v),
             RegValues::Utc(v) => {
                 let flat: Vec<u32> = v.iter().flat_map(|p| *p).collect();
