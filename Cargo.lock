@@ -103,6 +103,7 @@ name = "arcfile-rs"
 version = "0.1.0"
 dependencies = [
  "bitflags",
+ "bytemuck",
  "byteorder",
  "bzip2",
  "env_logger",
@@ -124,6 +125,12 @@ name = "bitflags"
 version = "2.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "843867be96c8daad0d758b57df9392b6d8d271134fce549de6ce169ff98a92af"
+
+[[package]]
+name = "bytemuck"
+version = "1.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c8efb64bd706a16a1bdde310ae86b351e4d21550d98d056f22f8a7f7a2183fec"
 
 [[package]]
 name = "byteorder"
