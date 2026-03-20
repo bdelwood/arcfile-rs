@@ -12,11 +12,10 @@ trait ToNumpy {
     fn into_numpy<'py>(self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>>;
 }
 
-impl ToNumpy for RegData {
+impl ToNumpy for RegData<RegValues> {
     fn into_numpy<'py>(self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let nchan = self.nchan();
-        let nsamp = self.nsamp();
-        let data = self.data();
+        let nchan = self.nchan;
+        let nsamp = self.nsamp;
 
         macro_rules! make_array {
             ($v:expr) => {{
@@ -29,7 +28,7 @@ impl ToNumpy for RegData {
             }};
         }
 
-        match data {
+        match self.into_values() {
             RegValues::U8(v) => make_array!(v),
             RegValues::I8(v) => make_array!(v),
             RegValues::U16(v) => make_array!(v),
@@ -73,7 +72,7 @@ mod arcfile {
     impl PyArcFile {
         #[staticmethod]
         #[pyo3(signature = (path, filters=None))]
-        fn open<'py>(
+        fn load<'py>(
             py: Python<'py>,
             path: Bound<'py, PyAny>,
             filters: Option<Vec<String>>,
@@ -99,7 +98,7 @@ mod arcfile {
                 .map_err(|e| PyIOError::new_err(e.to_string()))?;
             let mut af = py.detach(|| {
                 loader
-                    .open(&paths)
+                    .load(&paths)
                     .map_err(|e| PyIOError::new_err(e.to_string()))
             })?;
 

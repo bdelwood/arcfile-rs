@@ -3,7 +3,7 @@ mod logging;
 
 use rustmex::numeric::Numeric;
 use rustmex::prelude::*;
-use std::path::Path;
+use std::path::PathBuf;
 
 use arcfile_rs::arcfile::ArcFileLoader;
 use arcfile_rs::register::{RegData, RegValues};
@@ -28,31 +28,52 @@ fn readarc_rs(lhs: Lhs, rhs: Rhs) -> rustmex::Result<()> {
 
     let t_total = Instant::now();
 
-    // Get filename as char array.
-    // We'll convert it to a String
+    // Get filename. Accepts a single char array or a cell array of char arrays.
+    // Single string can be a directory or file path.
+    // Cell array allows passing multiple explicit file paths.
     let filename_mx = rhs
         .get(0)
         .error_if_missing("readarc:no_file", "Missing filename")?;
 
-    let filename_char = CharArray::from_mx_array(filename_mx)
-        .mex_err("readarc:bad_type", "Filename must be a char array")?;
-
-    // Convert char to cstring to String
-    let filename: String = filename_char.get_cstring().to_string_lossy().into_owned();
-    debug!("Parsed filename: {}", filename);
+    let paths: Vec<PathBuf> = if let Ok(cell) = CellArray::from_mx_array(filename_mx) {
+        debug!(
+            "Parsing filenames from cell array with {} element(s)",
+            cell.numel()
+        );
+        (0..cell.numel())
+            .flat_map(|i| cell.get(i).ok().flatten())
+            .map(|item| {
+                let chars = CharArray::from_mx_array(item)
+                    .mex_err("readarc:bad_type", "Cell elements must be strings.")?;
+                Ok(PathBuf::from(
+                    chars.get_cstring().to_string_lossy().into_owned(),
+                ))
+            })
+            .collect::<std::result::Result<Vec<_>, rustmex::Error>>()?
+    } else if let Ok(chars) = CharArray::from_mx_array(filename_mx) {
+        vec![PathBuf::from(
+            chars.get_cstring().to_string_lossy().into_owned(),
+        )]
+    } else {
+        return Err(rustmex::message::AdHoc(
+            "readarc:bad_type",
+            "Filename must be a char array or cell array of char arrays.",
+        )
+        .into());
+    };
+    debug!("Parsed {} path(s)", paths.len());
 
     // Get requested time range
     // C impl expects %Y-%b-%d:%T
-    let t1: Timestamp = if let Some(&ts_mex) = rhs.get(1) {
-        parse_timestamp(ts_mex)?
-    } else {
-        Timestamp::MIN
+    // [], '', etc (empty array/char) carries same meaning as None
+    let t1: Timestamp = match rhs.get(1) {
+        Some(&ts_mex) if !ts_mex.is_empty() => parse_timestamp(ts_mex)?,
+        _ => Timestamp::MIN,
     };
 
-    let t2: Timestamp = if let Some(&ts_mex) = rhs.get(2) {
-        parse_timestamp(ts_mex)?
-    } else {
-        Timestamp::MAX
+    let t2: Timestamp = match rhs.get(2) {
+        Some(&ts_mex) if !ts_mex.is_empty() => parse_timestamp(ts_mex)?,
+        _ => Timestamp::MAX,
     };
 
     debug!("Parsed time range: {:?}..={:?}", t1, t2);
@@ -109,8 +130,8 @@ fn readarc_rs(lhs: Lhs, rhs: Rhs) -> rustmex::Result<()> {
     let loader = ArcFileLoader::new(t1..=t2, &filters_ref)
         .mex_err("readarc:loader", "Failed to make loader")?;
     let mut af = loader
-        .open(&[Path::new(&filename).to_path_buf()])
-        .mex_err("readarc:open", "Failed to open")?;
+        .load(&paths)
+        .mex_err("readarc:load", "Failed to load")?;
 
     debug!(
         "File open completed in {:.2}s",
@@ -120,8 +141,12 @@ fn readarc_rs(lhs: Lhs, rhs: Rhs) -> rustmex::Result<()> {
     let t_convert = Instant::now();
 
     // Like Python bindings:
-    // avoid copying, prefer to have mex take ownership
+    // avoid copying, prefer to have mex take ownership.
     let regtree = af.into_tree();
+
+    debug!("into_tree: {:.3}s", t_convert.elapsed().as_secs_f64());
+
+    let t_mx = Instant::now();
 
     // make top level struct
     let mut map_struct = make_scalar_struct(regtree.keys())?;
@@ -133,7 +158,7 @@ fn readarc_rs(lhs: Lhs, rhs: Rhs) -> rustmex::Result<()> {
             let mut block_struct = make_scalar_struct(blocks.keys())?;
             // loop over blocks
             for (block_name, block) in blocks {
-                // actually extract and convert data type
+                // convert to mxArray
                 let mx = block.into_mex()?;
                 // fill in block struct
                 block_struct.set(to_cstring(&block_name)?.as_c_str(), mx)?;
@@ -148,6 +173,11 @@ fn readarc_rs(lhs: Lhs, rhs: Rhs) -> rustmex::Result<()> {
         map_struct.set(to_cstring(&map_name)?.as_c_str(), board_struct.into_inner())?;
     }
 
+    debug!(
+        "MATLAB struct assembly: {:.3}s",
+        t_mx.elapsed().as_secs_f64()
+    );
+
     // Write to first output slot
     // if let Some because user may not have asked for first slot in assignment
     if let Some(ret) = lhs.get_mut(0) {
@@ -155,10 +185,6 @@ fn readarc_rs(lhs: Lhs, rhs: Rhs) -> rustmex::Result<()> {
         ret.replace(map_struct.into_inner());
     }
 
-    debug!(
-        "MATLAB struct conversion completed in {:.2}s",
-        t_convert.elapsed().as_secs_f64()
-    );
     info!(
         "readarc_rs completed successfully in {:.2}s",
         t_total.elapsed().as_secs_f64()
@@ -172,27 +198,20 @@ trait ToMex {
     fn into_mex(self) -> rustmex::Result<MxArray>;
 }
 
-impl ToMex for RegData {
-    // TODO: Transpose to column-major; values are mixed up because we unpack RegValues as row major
-    fn into_mex(mut self) -> rustmex::Result<MxArray> {
-        // basically make_array from Python bindings
-        // with some extra care to handle errors, since we have
-        // to handle these more explicitly with rustmex than with PyO3
-        let nchan = self.nchan();
-        let nsamp = self.nsamp();
-        let data = self.data();
+impl ToMex for RegData<RegValues> {
+    fn into_mex(self) -> rustmex::Result<MxArray> {
+        let nchan = self.nchan;
+        let nsamp = self.nsamp;
 
         macro_rules! make_numeric {
             ($v:expr) => {{
                 let mx = Numeric::new($v.into_boxed_slice(), &[nsamp, nchan])
                     .mex_err("readarc:alloc", "Failed to create array")?;
-
                 Ok(mx.into_inner())
             }};
         }
 
-        // row-major...
-        match data {
+        match self.into_values() {
             RegValues::U8(v) => make_numeric!(v),
             RegValues::I8(v) => make_numeric!(v),
             RegValues::U16(v) => make_numeric!(v),
@@ -204,10 +223,7 @@ impl ToMex for RegData {
             RegValues::Bool(v) => make_numeric!(v),
 
             // Utc is Vec<[u32; 2]>,
-            // However, Matlab expects (MJD, time of day) packed into a single uint64
-            // Matlab does something like
-            // tmp(1:2:end)  % odd indices = low word = MJD
-            // tmp(2:2:end)  % even indices = high word = time_of_day_ms
+            // Matlab expects (MJD, time of day) packed into a single uint64
             RegValues::Utc(v) => {
                 let n = v.len();
                 let packed: Vec<u64> = v
