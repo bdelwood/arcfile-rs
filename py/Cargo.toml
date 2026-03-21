@@ -10,7 +10,8 @@ crate-type = ["cdylib"]
 [dependencies]
 arcfile-rs = { path = "../core" }
 numpy = "0.28.0"
-pyo3 = { version = "0.28.2", features = ["extension-module"] }
+pyo3 = { version = "0.28.2", features = ["extension-module", "abi3-py310"] }
 pyo3-log = "0.13.3"
 log = { workspace = true }
 jiff = { workspace = true }
+
