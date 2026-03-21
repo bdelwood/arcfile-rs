@@ -575,6 +575,7 @@ checksum = "357703d41365b4b27c590e3ed91eabb1b663f07c4c084095e60cbed4362dff0d"
 [[package]]
 name = "rustmex"
 version = "0.6.3"
+source = "git+https://gitlab.com/bdelwood/rustmex#0fc017b1a18cc5c97437a92d3222089f63ff317a"
 dependencies = [
  "cfg-if",
  "more-asserts",
@@ -590,6 +591,7 @@ dependencies = [
 [[package]]
 name = "rustmex-entrypoint"
 version = "0.4.2"
+source = "git+https://gitlab.com/bdelwood/rustmex#0fc017b1a18cc5c97437a92d3222089f63ff317a"
 dependencies = [
  "quote",
  "syn 1.0.109",
@@ -598,6 +600,7 @@ dependencies = [
 [[package]]
 name = "rustmex_core"
 version = "0.3.0"
+source = "git+https://gitlab.com/bdelwood/rustmex#0fc017b1a18cc5c97437a92d3222089f63ff317a"
 dependencies = [
  "num-complex",
 ]
@@ -605,6 +608,7 @@ dependencies = [
 [[package]]
 name = "rustmex_interleaved_complex"
 version = "0.2.0"
+source = "git+https://gitlab.com/bdelwood/rustmex#0fc017b1a18cc5c97437a92d3222089f63ff317a"
 dependencies = [
  "ndarray 0.15.6",
  "num-complex",
@@ -614,6 +618,7 @@ dependencies = [
 [[package]]
 name = "rustmex_matlab800"
 version = "0.1.2"
+source = "git+https://gitlab.com/bdelwood/rustmex#0fc017b1a18cc5c97437a92d3222089f63ff317a"
 dependencies = [
  "num-complex",
  "rustmex_core",
@@ -622,6 +627,7 @@ dependencies = [
 [[package]]
 name = "rustmex_separated_complex"
 version = "0.2.0"
+source = "git+https://gitlab.com/bdelwood/rustmex#0fc017b1a18cc5c97437a92d3222089f63ff317a"
 dependencies = [
  "ndarray 0.15.6",
  "num-complex",

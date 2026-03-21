@@ -8,7 +8,8 @@ crate-type = ["cdylib"]
 
 [dependencies]
 arcfile-rs = { path = "../core" }
-# rustmex = { version = "0.6.3", features = ["matlab800"] }
-rustmex = { path = "../../../gitlab/rustmex/rustmex", features = ["matlab800"] }
+rustmex = { git = 'https://gitlab.com/bdelwood/rustmex', version = "0.6.3", features = [
+    "matlab800",
+] }
 log = { workspace = true }
 jiff = { workspace = true }
