@@ -11,12 +11,6 @@ pub enum ArcError {
     #[error("Unknown format for file: {0}")]
     Format(String),
 
-    #[error("Memory allocation failure.")]
-    NoMem,
-
-    #[error("Unexpected end of file.")]
-    UnexpectedEof,
-
     #[error("Unknown register: {0}")]
     RegMap(String),
 
@@ -25,6 +19,9 @@ pub enum ArcError {
 
     #[error("Unknown format for file: 0x{0:04x}")]
     UnknownRegFlag(u32),
+
+    #[error("Invalid input: {0}")]
+    InvalidInput(String),
 }
 
 pub type ArcResult<T> = Result<T, ArcError>;

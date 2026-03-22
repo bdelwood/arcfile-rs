@@ -106,42 +106,50 @@ fn part_match(value: &str, filt: Option<&str>) -> bool {
     value == f
 }
 
-// TODO: clean up errors here
-// Don't think they should use ArcError, but maybe a different one?
-fn parse_chsel(chsel: &str) -> Result<Vec<usize>, std::io::Error> {
+/// Parse channel selection filter
+///
+/// eg board.map.block[1:2]
+/// board.map.block[1,2,3]
+fn parse_chsel(chsel: &str) -> ArcResult<Vec<usize>> {
     let mut channels = Vec::new();
 
-    for part in chsel.split(".") {
+    for part in chsel.split(",") {
         let part = part.trim();
         // If split_once is not None, we have a range of channel
         // use parse to parse string into usize
         if let Some((start, end)) = part.split_once(":") {
-            let start: usize = start
-                .trim()
-                .parse()
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
-            let end: usize = end
-                .trim()
-                .parse()
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+            let start: usize = start.trim().parse().map_err(|_| {
+                ArcError::InvalidInput(format!("invalid channel range start: {}", start))
+            })?;
+            let end: usize = end.trim().parse().map_err(|_| {
+                ArcError::InvalidInput(format!("invalid channel range end: {}", end))
+            })?;
+
+            // slight change from C implementation
+            // instead of silently ignoring, raise error
+            if start > end {
+                return Err(ArcError::InvalidInput("invalid channel selector".into()));
+            }
             channels.extend(start..=end);
         // otherwise, we have a single channel
         } else {
             let idx: usize = part
                 .parse()
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+                .map_err(|_| ArcError::InvalidInput(format!("invalid channel index: {part}")))?;
             channels.push(idx);
         };
     }
+
+    channels.sort_unstable();
     channels.dedup();
     Ok(channels)
 }
 
 /// Enable conversion from string to typed FilterSpec
 impl FromStr for FilterSpec {
-    type Err = std::io::Error;
+    type Err = ArcError;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+    fn from_str(s: &str) -> ArcResult<Self> {
         // split parts, map.board.block
         // where block has optional channel selection: `[:]`
         let mut parts = s.split('.');
@@ -159,7 +167,7 @@ impl FromStr for FilterSpec {
                     let rest = rest.strip_suffix(']').ok_or_else(|| {
                         // NB: this is a divergence in behavior from the C implementation
                         // arguably it's a bug to accept chsel strings that are malformed
-                        std::io::Error::new(std::io::ErrorKind::InvalidInput, "missing closing ']'")
+                        ArcError::InvalidInput("missing closing ']'".into())
                     })?;
 
                     // not sure this is needed, but check if empty
@@ -680,11 +688,15 @@ impl ArcFile {
     }
 
     // Methods for interfacing with flat register map
-    pub fn get(&self, name: &str) -> Option<&Register> {
-        self.registers.get(name)
+    pub fn get(&self, name: &str) -> ArcResult<&Register> {
+        self.registers
+            .get(name)
+            .ok_or_else(|| ArcError::RegMap(name.to_string()))
     }
-    pub fn get_mut(&mut self, name: &str) -> Option<&mut Register> {
-        self.registers.get_mut(name)
+    pub fn get_mut(&mut self, name: &str) -> ArcResult<&mut Register> {
+        self.registers
+            .get_mut(name)
+            .ok_or_else(|| ArcError::RegMap(name.to_string()))
     }
 
     /// List register names.
