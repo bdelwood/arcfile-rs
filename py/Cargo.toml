@@ -6,7 +6,7 @@ rust-version = { workspace = true }
 
 [lib]
 name = "arcfile"
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 arcfile-rs = { path = "../core" }
@@ -15,4 +15,4 @@ pyo3 = { version = "0.28.2", features = ["extension-module", "abi3-py310"] }
 pyo3-log = "0.13.3"
 log = { workspace = true }
 jiff = { workspace = true }
-
+pyo3-stub-gen = "0.19.0"

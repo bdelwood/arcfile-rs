@@ -6,7 +6,11 @@ use numpy::PyArray1;
 use pyo3::prelude::*;
 use pyo3::types::PyDateTime;
 use pyo3::types::PyDict;
+use pyo3_stub_gen::derive::*;
 use std::time::Instant;
+
+// generate stubs with `cargo run --release --bin stub_gen`
+pyo3_stub_gen::define_stub_info_gatherer!(stub_info);
 
 #[pyo3::pymodule]
 mod arcfile {
@@ -25,6 +29,7 @@ mod arcfile {
         Ok(())
     }
 
+    #[gen_stub_pyclass]
     #[pyclass(name = "ArcFile")]
     struct PyArcFile {
         #[pyo3(get)]
@@ -32,6 +37,7 @@ mod arcfile {
         dict: Py<PyDict>,
     }
 
+    #[gen_stub_pymethods]
     #[pymethods]
     impl PyArcFile {
         #[staticmethod]
