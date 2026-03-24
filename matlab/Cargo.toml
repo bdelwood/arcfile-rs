@@ -1,8 +1,11 @@
 [package]
 name = "arcfile-matlab"
-version = "0.1.0"
-edition = "2024"
-rust-version = { workspace = true }
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [lib]
 crate-type = ["cdylib"]
@@ -12,5 +15,5 @@ arcfile-rs = { path = "../core" }
 rustmex = { git = 'https://gitlab.com/bdelwood/rustmex', version = "0.6.3", features = [
     "matlab800",
 ] }
-log = { workspace = true }
-jiff = { workspace = true }
+log.workspace = true
+jiff.workspace = true

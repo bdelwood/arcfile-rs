@@ -3,7 +3,13 @@ members = ["core", "py", "matlab"]
 resolver = "3"
 
 [workspace.package]
+version = "0.1.0"
+edition = "2024"
 rust-version = "1.93.1"
+authors = ["Brodi Elwood <bdelwood@fas.harvard.edu>"]
+license = "MIT"
+repository = "https://github.com/bdelwood/arcfile-rs"
+description = "BK GCP arcfile binary data format reader with MATLAB and Python bindings"
 
 [workspace.dependencies]
 log = "0.4.29"
