@@ -17,13 +17,13 @@ classifiers = [
 
 dependencies = ["numpy>=2.1"]
 
+[dependency-groups]
+dev = ["pytest>=9.0.2"]
 
 [build-system]
 requires = ["maturin>=1.5,<2.0"]
 build-backend = "maturin"
 
-
 [tool.maturin]
 bindings = "pyo3"
 features = ["pyo3/extension-module"]
-

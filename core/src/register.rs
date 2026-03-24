@@ -301,3 +301,122 @@ impl RegValues {
         }
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::regmap::RegBlockSpec;
+
+    fn make_spec(reg_type_bits: u32, nchan: usize, spf: usize, ofs: usize) -> RegBlockSpec {
+        let flags = 0x20000C; // FAST | RW
+        let spec = [reg_type_bits | flags, 0x0F, 0, 0, nchan as u32, spf as u32];
+        RegBlockSpec::new("test".into(), "board".into(), "block".into(), spec, ofs).unwrap()
+    }
+
+    #[test]
+    fn scatter_frame_appends_multiple_frames_per_channel() {
+        let spec = make_spec(0x2000, 2, 1, 0); // UChar, nchan=2, spf=1, ofs=0
+        let mut data = RegData::<Buffer>::new(&spec, None, 2);
+
+        data.scatter_frame(&[1, 10]);
+        data.scatter_frame(&[2, 20]);
+
+        let out = data.finish().into_values();
+
+        match out {
+            RegValues::U8(v) => {
+                assert_eq!(
+                    v,
+                    vec![
+                        1, 2, // ch0 across both frames
+                        10, 20, // ch1 across both frames
+                    ]
+                );
+            }
+            _ => panic!("expected U8"),
+        }
+    }
+
+    #[test]
+    fn scatter_frame_respects_sparse_channel_selection() {
+        let spec = make_spec(0x2000, 4, 1, 0); // UChar, nchan=4, ofs=0
+        let mut data = RegData::<Buffer>::new(&spec, Some(vec![0, 2]), 1);
+
+        data.scatter_frame(&[11, 22, 33, 44]);
+
+        let out = data.finish().into_values();
+
+        match out {
+            RegValues::U8(v) => {
+                assert_eq!(
+                    v,
+                    vec![
+                        11, // selected source ch0
+                        33, // selected source ch2
+                    ]
+                );
+            }
+            _ => panic!("expected U8"),
+        }
+    }
+
+    #[test]
+    fn scatter_frame_grows_buffer_and_preserves_existing_data() {
+        let spec = make_spec(0x2000, 2, 1, 0); // UChar, nchan=2, ofs=0
+        let mut data = RegData::<Buffer>::new(&spec, None, 1); // capacity=1, forces grow
+
+        data.scatter_frame(&[1, 10]);
+        data.scatter_frame(&[2, 20]);
+        data.scatter_frame(&[3, 30]);
+
+        let out = data.finish().into_values();
+
+        match out {
+            RegValues::U8(v) => {
+                assert_eq!(v, vec![1, 2, 3, 10, 20, 30]);
+            }
+            _ => panic!("expected U8"),
+        }
+    }
+
+    #[test]
+    fn into_values_converts_bool_from_u8() {
+        let data = RegData {
+            nchan: 1,
+            nsamp: 4,
+            reg_type: RegType::Bool,
+            storage: RegValues::U8(vec![0, 1, 2, 0]),
+        };
+
+        match data.into_values() {
+            RegValues::Bool(v) => assert_eq!(v, vec![false, true, true, false]),
+            _ => panic!("expected Bool"),
+        }
+    }
+
+    #[test]
+    fn concatenate_appends_channel_data_across_parts() {
+        let p1 = RegData {
+            nchan: 2,
+            nsamp: 2,
+            reg_type: RegType::UChar,
+            storage: RegValues::U8(vec![1, 2, 10, 20]),
+        };
+
+        let p2 = RegData {
+            nchan: 2,
+            nsamp: 2,
+            reg_type: RegType::UChar,
+            storage: RegValues::U8(vec![3, 4, 30, 40]),
+        };
+
+        let out = RegData::concatenate(vec![p1, p2]).into_values();
+
+        match out {
+            RegValues::U8(v) => {
+                assert_eq!(v, vec![1, 2, 3, 4, 10, 20, 30, 40]);
+            }
+            _ => panic!("expected U8"),
+        }
+    }
+}

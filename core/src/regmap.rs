@@ -458,3 +458,107 @@ fn add_status_regblock(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    // some helpers to write to buffers
+    fn write_u16(buf: &mut Vec<u8>, v: u16) {
+        buf.extend_from_slice(&v.to_le_bytes());
+    }
+
+    fn write_u32(buf: &mut Vec<u8>, v: u32) {
+        buf.extend_from_slice(&v.to_le_bytes());
+    }
+
+    fn write_name(buf: &mut Vec<u8>, name: &str) {
+        write_u16(buf, name.len() as u16);
+        buf.extend_from_slice(name.as_bytes());
+    }
+
+    fn write_regblock_spec(buf: &mut Vec<u8>, spec: [u32; 6]) {
+        for s in &spec {
+            write_u32(buf, *s);
+        }
+    }
+
+    #[test]
+    fn parse_regmap_round_trips_single_board() {
+        // start constructing block
+        let mut buf = Vec::new();
+
+        // add map
+        write_u16(&mut buf, 1);
+        write_name(&mut buf, "array");
+
+        // add board
+        write_u16(&mut buf, 1);
+        write_name(&mut buf, "mce0");
+
+        // add block
+        // of type UInt | FAST | RW
+        // with nchan=3, spf=1
+        write_u16(&mut buf, 1);
+        write_name(&mut buf, "data");
+        let typeword = 0x20000 | 0x200000 | 0x0C; // UInt | FAST | RW
+        write_regblock_spec(&mut buf, [typeword, 0x0F, 0, 0, 3, 1]);
+
+        // 16 bytes board padding
+        buf.extend_from_slice(&[0u8; 16]);
+
+        let regs = parse_regmap(&buf, Endianness::Little).unwrap();
+
+        // 8 frame registers + 1 implicit status + 1 explicit block = 10
+        assert_eq!(regs.len(), 10);
+
+        // frame registers always included
+        assert_eq!(regs[0].full_name(), "array.frame.status");
+        assert_eq!(regs[7].full_name(), "array.frame.markSeq");
+
+        // implicit board status register
+        assert_eq!(regs[8].full_name(), "array.mce0.status");
+        assert_eq!(regs[8].type_name(), "uint32");
+
+        // assert block we made comes out as expected
+        let data = &regs[9];
+        assert_eq!(data.full_name(), "array.mce0.data");
+        assert_eq!(data.type_name(), "uint32");
+        assert_eq!(data.nchan, 3);
+        assert_eq!(data.spf, 1);
+        assert!(data.is_fast());
+
+        // offsets should be cumulative
+        assert!(data.ofs > regs[8].ofs);
+    }
+
+    #[test]
+    fn typeword_try_from_rejects_multiple_type_bits() {
+        let multi = 0x40000 | 0x80000; // Float + Double
+        let result = TypeWord::try_from(multi);
+        // make sure error is raised for bad flag combos
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ArcError::Corrupted(msg) => assert!(msg.contains("Multiple type flags")),
+            other => panic!("expected Corrupted, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn frame_size_accounts_for_complex_flag() {
+        let base_tw = 0x40000 | 0x20000C; // Float | FAST | RW
+        let complex_tw = base_tw | 0x1; // + COMPLEX
+
+        let base_spec = [base_tw, 0x0F, 0, 0, 4, 1];
+        let complex_spec = [complex_tw, 0x0F, 0, 0, 4, 1];
+
+        let base = RegBlockSpec::new("t".into(), "b".into(), "r".into(), base_spec, 0).unwrap();
+
+        let complex =
+            RegBlockSpec::new("t".into(), "b".into(), "r".into(), complex_spec, 0).unwrap();
+
+        assert_eq!(complex.frame_size(), 2 * base.frame_size());
+        assert_eq!(base.element_size(), 4); // f32
+        assert_eq!(complex.element_size(), 8); // complex f32 should be double
+    }
+}

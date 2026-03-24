@@ -1,7 +1,3 @@
-// TODO:
-// refactoring and cleanup
-// implement listarc
-
 use crate::error::{ArcError, ArcResult};
 use crate::register::{Buffer, RegData, RegValues};
 use crate::regmap::{Endianness, RegBlockSpec, parse_regmap};
@@ -40,6 +36,12 @@ pub struct ArcFile {
 pub struct Register {
     pub spec: RegBlockSpec,
     data: Option<RegData<RegValues>>,
+}
+
+impl Register {
+    pub fn data(&self) -> Option<&RegData<RegValues>> {
+        self.data.as_ref()
+    }
 }
 
 #[repr(u32)]
@@ -702,5 +704,127 @@ impl ArcFile {
     /// List register names.
     pub fn register_names(&self) -> Vec<&String> {
         self.registers.keys().collect()
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn list_and_sort_includes_file_before_range_start() {
+        // use tempfile
+        let dir = tempfile::tempdir().unwrap();
+
+        // create empty files with arcfile-style names
+        let names = [
+            "20240101_000000.dat",
+            "20240102_120000.dat",
+            "20240103_000000.dat",
+            "20240104_000000.dat",
+            "readme.txt", // should be ignored
+        ];
+        for name in &names {
+            std::fs::File::create(dir.path().join(name)).unwrap();
+        }
+
+        // set up list_and_sort
+        let start = Timestamp::from_str("2024-01-02T12:00:00Z").unwrap();
+        let end = Timestamp::from_str("2024-01-03T23:59:59Z").unwrap();
+        let range = start..=end;
+
+        let files = list_and_sort(dir.path(), &range).unwrap();
+        // unpack file stems
+        let stems: Vec<&str> = files
+            .iter()
+            .filter_map(|p| p.file_name()?.to_str())
+            .collect();
+
+        // Jan 1 is before range but included as the "pre" file
+        assert!(stems.contains(&"20240101_000000.dat"));
+        // Jan 2 and 3 are in range
+        assert!(stems.contains(&"20240102_120000.dat"));
+        assert!(stems.contains(&"20240103_000000.dat"));
+        // Jan 4 is after range
+        assert!(!stems.contains(&"20240104_000000.dat"));
+        // non-arcfiles excluded
+        assert!(!stems.contains(&"readme.txt"));
+    }
+
+    #[test]
+    fn part_match_handles_edge_cases() {
+        // None filter matches anything
+        assert!(part_match("mce0", None));
+        assert!(part_match("anything", None));
+
+        // empty string matches anything
+        assert!(part_match("mce0", Some("")));
+
+        // exact match
+        assert!(part_match("mce0", Some("mce0")));
+        assert!(!part_match("mce01", Some("mce0")));
+
+        // wildcard prefix
+        assert!(part_match("mce0", Some("mce*")));
+        assert!(part_match("mce12", Some("mce*")));
+        assert!(!part_match("antenna", Some("mce*")));
+
+        // bare * matches everything
+        assert!(part_match("anything", Some("*")));
+    }
+
+    #[test]
+    fn concatenate_single_file_returns_as_is() {
+        // build a minimal ArcFile with one register
+        // Mock hashmap and spec
+        let mut registers = HashMap::new();
+        let tw = 0x2000 | 0x20000C;
+        let spec = RegBlockSpec::new(
+            "t".into(),
+            "b".into(),
+            "r".into(),
+            [tw, 0x0F, 0, 0, 2, 1],
+            0,
+        )
+        .unwrap();
+
+        registers.insert(
+            "t.b.r".to_string(),
+            Register {
+                spec,
+                data: Some(RegData {
+                    nchan: 2,
+                    nsamp: 3,
+                    reg_type: RegType::UChar,
+                    storage: RegValues::U8(vec![1, 2, 3, 10, 20, 30]),
+                }),
+            },
+        );
+
+        // manually construct Arcfile
+        let af = ArcFile {
+            header: ArcHeader {
+                frame_len: 100,
+                frame0_ofs: 24,
+                arrmap_rev: 0,
+                endianness: Endianness::Little,
+                raw: [0; 6],
+            },
+            registers,
+        };
+
+        // Check that concatenating a single file returns itself
+        let merged = ArcFile::concatenate(vec![af]).unwrap();
+
+        // should pass through without extra allocation
+        let reg = merged.get("t.b.r").unwrap();
+        let data = reg.data.as_ref().unwrap();
+        assert_eq!(data.nsamp, 3);
+        assert_eq!(data.nchan, 2);
+
+        match &data.storage {
+            RegValues::U8(v) => assert_eq!(v, &vec![1, 2, 3, 10, 20, 30]),
+            _ => panic!("expected U8"),
+        }
     }
 }
