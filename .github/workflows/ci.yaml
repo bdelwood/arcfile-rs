@@ -48,18 +48,13 @@ jobs:
           rustup toolchain list
           cargo -V
 
-      # TODO: enable when repo is public; doesn't require license in that case
-      # - uses: matlab-actions/setup-matlab@v2
-
       - name: Run Clippy
         shell: bash
         # TODO: Consider adding `-- -D warnings`
-        # TODO: enable arcfile-matlab when repo is public
-        run: cargo clippy --release --workspace --exclude arcfile-matlab
+        run: cargo clippy --release
 
       - name: Run tests
         # TODO: enable integration tests when mock arcfile is added to repo
-        # TODO: enable arcfile-matlab when repo is public
         run: cargo test --release --lib --workspace --exclude arcfile-matlab
 
   python-tests:
