@@ -154,7 +154,7 @@ mod arcfile {
         }
 
         fn keys<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-            Ok(self.dict.bind(py).call_method0("keys")?)
+            self.dict.bind(py).call_method0("keys")
         }
     }
 }
@@ -194,7 +194,7 @@ impl ToNumpy for RegData<RegValues> {
             RegValues::Utc(v) => {
                 let flat: Vec<u32> = v.iter().flat_map(|p| *p).collect();
                 let arr = PyArray1::from_vec(py, flat);
-                arr.call_method1("reshape", ((nsamp, 2 as usize),))
+                arr.call_method1("reshape", ((nsamp, 2_usize),))
             }
         }
     }

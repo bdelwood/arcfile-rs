@@ -23,7 +23,7 @@ fn arcloader_fixture(t1: Option<&str>, t2: Option<&str>, filters: &[&str]) -> Ar
         .unwrap_or(Timestamp::MAX);
 
     let loader = ArcFileLoader::new(start..=end, filters)?;
-    Ok(loader.load(&[test_dir])?)
+    loader.load(&[test_dir])
 }
 
 #[test]
@@ -45,7 +45,7 @@ fn load_with_filter() {
     let filt_chsel = "mce0.data.fb[1]";
     let filt_chsel_repeat = "mce0.data.fb[1,2,1]";
 
-    let af = arcloader_fixture(None, None, &[&filt1, &filt2]).unwrap();
+    let af = arcloader_fixture(None, None, &[filt1, filt2]).unwrap();
 
     // should only have 2 registers
     assert_eq!(af.registers.len(), 2);
@@ -53,20 +53,20 @@ fn load_with_filter() {
     assert!(af.get(filt2).is_ok());
 
     // just mce registers
-    let af = arcloader_fixture(None, None, &[&filt_wildcard]).unwrap();
+    let af = arcloader_fixture(None, None, &[filt_wildcard]).unwrap();
     assert_eq!(af.registers.len(), 4);
     // check all registers start with mce
     assert!(af.register_names().iter().all(|s| s.starts_with("mce")));
 
     // now test chsel
-    let af = arcloader_fixture(None, None, &[&filt_chsel]).unwrap();
+    let af = arcloader_fixture(None, None, &[filt_chsel]).unwrap();
     assert_eq!(af.registers.len(), 1);
     let reg = af.get("mce0.data.fb").unwrap();
     assert_eq!(reg.data().unwrap().nchan, 1);
     assert_eq!(reg.data().unwrap().nsamp, 60000);
 
     // repeat channels in the filter should be deduped
-    let af = arcloader_fixture(None, None, &[&filt_chsel_repeat]).unwrap();
+    let af = arcloader_fixture(None, None, &[filt_chsel_repeat]).unwrap();
     assert_eq!(af.registers.len(), 1);
     let reg = af.get("mce0.data.fb").unwrap();
     assert_eq!(reg.data().unwrap().nchan, 2);

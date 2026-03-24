@@ -47,9 +47,9 @@ impl Register {
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ArchiveRecordType {
-    SizeRecord = 0,
-    ArrayMapRecord = 1,
-    FrameRecord = 2,
+    Size = 0,
+    ArrayMap = 1,
+    Frame = 2,
 }
 
 impl TryFrom<u32> for ArchiveRecordType {
@@ -57,9 +57,9 @@ impl TryFrom<u32> for ArchiveRecordType {
 
     fn try_from(v: u32) -> Result<Self, Self::Error> {
         match v {
-            0 => Ok(ArchiveRecordType::SizeRecord),
-            1 => Ok(ArchiveRecordType::ArrayMapRecord),
-            2 => Ok(ArchiveRecordType::FrameRecord),
+            0 => Ok(ArchiveRecordType::Size),
+            1 => Ok(ArchiveRecordType::ArrayMap),
+            2 => Ok(ArchiveRecordType::Frame),
             _ => Err(ArcError::Format(format!("Unknown record type: {v}"))),
         }
     }
@@ -206,7 +206,7 @@ impl TryFrom<&Path> for FileType {
         let ext = path
             .extension()
             .and_then(|e| e.to_str())
-            .ok_or(ArcError::Format(format!("Missing file extension.")))?;
+            .ok_or(ArcError::Format("Missing file extension.".to_string()))?;
         match ext {
             "gz" => Ok(Self::Gzip),
             "bz2" => Ok(Self::Bzip2),
@@ -255,13 +255,13 @@ fn read_header(reader: &mut dyn Read) -> ArcResult<ArcHeader> {
 
     // check header sections containing size and array map records
     // are as they're supposed to be
-    let ArchiveRecordType::SizeRecord = ArchiveRecordType::try_from(header[1])? else {
+    let ArchiveRecordType::Size = ArchiveRecordType::try_from(header[1])? else {
         return Err(ArcError::Corrupted(
             "Malformed arcfile: size should be first record.".to_string(),
         ));
     };
 
-    let ArchiveRecordType::ArrayMapRecord = ArchiveRecordType::try_from(header[4])? else {
+    let ArchiveRecordType::ArrayMap = ArchiveRecordType::try_from(header[4])? else {
         return Err(ArcError::Corrupted(
             "Malformed arcfile: array map should be second record.".to_string(),
         ));
@@ -306,10 +306,10 @@ fn estimate_nframes(path: &Path, header: &ArcHeader) -> usize {
     // gzip
     // extract from the uncompressed size in the trailer
     if path.extension().is_some_and(|e| e == "gz") {
-        if let Some(size) = gz_uncompressed_size(path) {
-            if size > header.frame0_ofs {
-                return (size - header.frame0_ofs) / header.frame_len;
-            }
+        if let Some(size) = gz_uncompressed_size(path)
+            && size > header.frame0_ofs
+        {
+            return (size - header.frame0_ofs) / header.frame_len;
         }
         return CHUNK_FRAMES;
     }
@@ -434,7 +434,7 @@ impl ArcFileLoader {
         // parallel open
         let afs = paths
             .par_iter()
-            .map(|p| ArcFile::open(&p, &self.filters))
+            .map(|p| ArcFile::open(p, &self.filters))
             .collect::<ArcResult<Vec<_>>>()?;
 
         trace!("par_iter open: {:.2}s", t1.elapsed().as_secs_f64());
@@ -486,7 +486,7 @@ impl ArcFile {
             // skip any registers marked as not archived
             .filter(|spec| spec.do_arc())
             // skip registers not matched by user provided filter
-            .filter(|spec| filters.is_empty() || filters.iter().any(|f| f.matches(&spec)))
+            .filter(|spec| filters.is_empty() || filters.iter().any(|f| f.matches(spec)))
             // pre-allocate output buffer for each register
             // map register to (register specification, register data) tuple
             .map(|spec| {

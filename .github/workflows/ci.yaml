@@ -30,8 +30,8 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
-  lint:
-    name: Clippy
+  check:
+    name: Run linting + tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -41,20 +41,6 @@ jobs:
         with:
           components: clippy
 
-      - name: Run Clippy
-        shell: bash
-        # TODO: Consider adding `-- -D warnings`
-        run: cargo clippy
-
-  tests:
-    name: Run tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install Rust
-        uses: actions-rust-lang/setup-rust-toolchain@v1
-
       - name: Check toolchain
         shell: bash
         run: |
@@ -62,9 +48,19 @@ jobs:
           rustup toolchain list
           cargo -V
 
+      # TODO: enable when repo is public; doesn't require license in that case
+      # - uses: matlab-actions/setup-matlab@v2
+
+      - name: Run Clippy
+        shell: bash
+        # TODO: Consider adding `-- -D warnings`
+        # TODO: enable arcfile-matlab when repo is public
+        run: cargo clippy --release --workspace --exclude arcfile-matlab
+
       - name: Run tests
         # TODO: enable integration tests when mock arcfile is added to repo
-        run: cargo test --release --lib
+        # TODO: enable arcfile-matlab when repo is public
+        run: cargo test --release --lib --workspace --exclude arcfile-matlab
 
   python-tests:
     name: Run Python tests

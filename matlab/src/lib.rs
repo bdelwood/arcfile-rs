@@ -31,6 +31,7 @@ fn readarc_rs(lhs: Lhs, rhs: Rhs) -> rustmex::Result<()> {
     // Get filename. Accepts a single char array or a cell array of char arrays.
     // Single string can be a directory or file path.
     // Cell array allows passing multiple explicit file paths.
+    #[allow(clippy::get_first)]
     let filename_mx = rhs
         .get(0)
         .error_if_missing("readarc:no_file", "Missing filename")?;
@@ -261,7 +262,7 @@ fn make_scalar_struct<'a, K: Iterator<Item = &'a String>>(
     keys: K,
 ) -> rustmex::Result<ScalarStruct<MxArray>> {
     let cstring: Vec<CString> = keys
-        .map(|k| to_cstring(&k))
+        .map(|k| to_cstring(k))
         .collect::<std::result::Result<Vec<_>, _>>()?;
     let refs: Vec<&CStr> = cstring.iter().map(|s| s.as_c_str()).collect();
     Ok(Struct::new(&[1, 1], &refs).into_scalar().unwrap())

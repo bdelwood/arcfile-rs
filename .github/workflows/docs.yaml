@@ -1,13 +1,15 @@
 name: Generate docs for core library
 
 on:
-  push:
-    branches: [master]
-    paths:
-      - "core/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - ".github/workflows/docs.yml"
+  # TODO: Enable when GH pages is set up
+  # push:
+  #   branches: [master]
+  #   paths:
+  #     - "core/**"
+  #     - "Cargo.toml"
+  #     - "Cargo.lock"
+  #     - ".github/workflows/docs.yml"
+  workflow_dispatch:
 
 permissions:
   contents: read

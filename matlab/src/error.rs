@@ -6,6 +6,6 @@ pub(crate) trait MexResult<T> {
 
 impl<T, E: std::fmt::Display> MexResult<T> for Result<T, E> {
     fn mex_err(self, id: &'static str, msg: &str) -> Result<T, MexErr> {
-        self.map_err(|e| rustmex::message::AdHoc(id, format!("{e}\n{}", msg.to_string())))
+        self.map_err(|e| rustmex::message::AdHoc(id, format!("{e}\n{}", msg)))
     }
 }

@@ -140,10 +140,10 @@ impl RegData<RegValues> {
     /// Consume and return the typed data.
     /// Bool registers are converted from U8 here for use with the binding libraries
     pub fn into_values(self) -> RegValues {
-        if self.reg_type == RegType::Bool {
-            if let RegValues::U8(bytes) = self.storage {
-                return RegValues::Bool(bytes.into_iter().map(|b| b != 0).collect());
-            }
+        if self.reg_type == RegType::Bool
+            && let RegValues::U8(bytes) = self.storage
+        {
+            return RegValues::Bool(bytes.into_iter().map(|b| b != 0).collect());
         }
         self.storage
     }
