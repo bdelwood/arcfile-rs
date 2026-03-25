@@ -20,6 +20,7 @@ pub use crate::regmap::RegType;
 /// Matches the C implementation's NBUFFRAMES.
 const CHUNK_FRAMES: usize = 64;
 
+#[derive(Default)]
 pub struct ArcHeader {
     pub frame_len: usize,
     pub frame0_ofs: usize,
@@ -28,6 +29,7 @@ pub struct ArcHeader {
     raw: [u32; 6],
 }
 
+#[derive(Default)]
 pub struct ArcFile {
     pub header: ArcHeader,
     pub registers: HashMap<String, Register>,
@@ -456,6 +458,11 @@ impl ArcFileLoader {
         );
         let t1 = std::time::Instant::now();
 
+        if paths.is_empty() {
+            info!("Selected zero files.");
+            return Ok(ArcFile::default());
+        }
+
         // parallel open
         let afs = paths
             .par_iter()
@@ -640,6 +647,9 @@ impl ArcFile {
     /// and concatenate them into a single, contiguous "virtual" arcfile.
     pub fn concatenate(files: Vec<Self>) -> ArcResult<Self> {
         let mut all_files: Vec<Self> = files.into_iter().collect();
+
+        // belt-and-suspenders check
+        // we shouldn't reach here normally, as we return an empty/default ArcFile when no files are found
         if all_files.is_empty() {
             return Err(ArcError::Format("No files.".to_string()));
         }

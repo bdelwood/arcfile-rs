@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use arcfile_core::arcfile::ArcFileLoader;
 use arcfile_core::register::{RegData, RegValues};
 use rustmex::MatlabClass;
+use rustmex::NewEmpty;
 use rustmex::cell::CellArray;
 use rustmex::char::CharArray;
 use rustmex::structs::{ScalarStruct, Struct};
@@ -138,6 +139,19 @@ fn readarc_rs(lhs: Lhs, rhs: Rhs) -> rustmex::Result<()> {
         "File open completed in {:.2}s",
         t_open.elapsed().as_secs_f64()
     );
+
+    // If the ArcFile is empty, we should return
+    // follows behavior in `mex_readarc.c` line 47
+    if af.registers.is_empty() {
+        let empty = Struct::new_empty();
+
+        if let Some(ret) = lhs.get_mut(0) {
+            debug!("No registers. Returning empty struct array.");
+            ret.replace(empty.into_inner());
+        }
+
+        return Ok(());
+    }
 
     let t_convert = Instant::now();
 

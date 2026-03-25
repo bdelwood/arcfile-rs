@@ -318,6 +318,12 @@ impl Endianness {
     }
 }
 
+impl Default for Endianness {
+    fn default() -> Self {
+        Self::native()
+    }
+}
+
 // essentially replaces MemBuf with Rust native objects
 pub struct RegMapReader<'a> {
     cursor: Cursor<&'a [u8]>,
