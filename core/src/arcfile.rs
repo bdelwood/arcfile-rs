@@ -179,9 +179,17 @@ impl FromStr for FilterSpec {
                         Some(name.to_string())
                     };
 
+                    let channels = if rest.is_empty() {
+                        // handle channel selection filters like []
+                        Some(vec![])
+                    } else {
+                        // otherwise, extract channel selection into vec of usize
+                        Some(parse_chsel(rest)?)
+                    };
+
                     // "rest" is everything outside of name
                     // parse using
-                    (name, Some(parse_chsel(rest)?))
+                    (name, channels)
                 } else {
                     (Some(b.to_string()), None)
                 }
@@ -486,17 +494,34 @@ impl ArcFile {
             // skip any registers marked as not archived
             .filter(|spec| spec.do_arc())
             // skip registers not matched by user provided filter
-            .filter(|spec| filters.is_empty() || filters.iter().any(|f| f.matches(spec)))
+            // NB: C implementation's channel/filter selection is "first match"
+            // which admits functionality like excluding sets of detectors, eg
+            // ["map.board.block[]", "*"] would exclude map.board.block, because no channels are selected
+            // but it matches first against *
             // pre-allocate output buffer for each register
             // map register to (register specification, register data) tuple
-            .map(|spec| {
-                let channels = filters
-                    .iter()
-                    .find(|f| f.matches(&spec))
-                    .and_then(|f| f.channels.clone());
+            .filter_map(|spec| {
+                let matched = if filters.is_empty() {
+                    // if filters
+                    Some(None)
+                } else {
+                    filters
+                        .iter()
+                        .find(|f| f.matches(&spec))
+                        .map(|f| f.channels.clone())
+                };
+
+                let channels = match matched {
+                    // no filters matched
+                    None => return None,
+                    // [] exclusion (ie empty set)
+                    Some(Some(ch)) if ch.is_empty() => return None,
+                    Some(ch) => ch,
+                };
 
                 let reg_data = RegData::new(&spec, channels, nframes_est);
-                (spec, reg_data)
+
+                Some((spec, reg_data))
             })
             .collect();
 
