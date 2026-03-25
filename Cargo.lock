@@ -92,30 +92,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "arcfile-matlab"
-version = "0.1.0"
-dependencies = [
- "arcfile-rs",
- "jiff",
- "log",
- "rustmex",
-]
-
-[[package]]
-name = "arcfile-py"
-version = "0.1.0"
-dependencies = [
- "arcfile-rs",
- "jiff",
- "log",
- "numpy",
- "pyo3",
- "pyo3-log",
- "pyo3-stub-gen",
-]
-
-[[package]]
-name = "arcfile-rs"
+name = "arcfile"
 version = "0.1.0"
 dependencies = [
  "bitflags",
@@ -129,6 +106,29 @@ dependencies = [
  "rayon",
  "tempfile",
  "thiserror",
+]
+
+[[package]]
+name = "arcfile-mex"
+version = "0.1.0"
+dependencies = [
+ "arcfile",
+ "jiff",
+ "log",
+ "rustmex",
+]
+
+[[package]]
+name = "arcfile-py"
+version = "0.1.0"
+dependencies = [
+ "arcfile",
+ "jiff",
+ "log",
+ "numpy",
+ "pyo3",
+ "pyo3-log",
+ "pyo3-stub-gen",
 ]
 
 [[package]]

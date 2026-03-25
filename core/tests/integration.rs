@@ -1,5 +1,5 @@
-use arcfile_rs::arcfile::{ArcFile, ArcFileLoader};
-use arcfile_rs::error::{ArcError, ArcResult};
+use arcfile::arcfile::{ArcFile, ArcFileLoader};
+use arcfile::error::{ArcError, ArcResult};
 use jiff::Timestamp;
 use std::{path::PathBuf, str::FromStr};
 
@@ -28,13 +28,13 @@ fn arcloader_fixture(t1: Option<&str>, t2: Option<&str>, filters: &[&str]) -> Ar
 
 #[test]
 fn load_no_args() {
-    let af = arcloader_fixture(None, None, &[]).unwrap();
-
-    // no filter, so we expect all the registers
-    assert_eq!(af.registers.len(), 2465);
+    let mut af = arcloader_fixture(None, None, &[]).unwrap();
     // check a feedback register
     let reg = af.get("mce0.data.fb").unwrap();
     assert!(reg.data().unwrap().nsamp > 0);
+    // no filter, so we expect all the maps
+    // run this last since into_tree takes the data
+    assert_eq!(af.into_tree().len(), 6);
 }
 
 #[test]
@@ -63,14 +63,14 @@ fn load_with_filter() {
     assert_eq!(af.registers.len(), 1);
     let reg = af.get("mce0.data.fb").unwrap();
     assert_eq!(reg.data().unwrap().nchan, 1);
-    assert_eq!(reg.data().unwrap().nsamp, 60000);
+    assert_eq!(reg.data().unwrap().nsamp, 60);
 
     // repeat channels in the filter should be deduped
     let af = arcloader_fixture(None, None, &[filt_chsel_repeat]).unwrap();
     assert_eq!(af.registers.len(), 1);
     let reg = af.get("mce0.data.fb").unwrap();
     assert_eq!(reg.data().unwrap().nchan, 2);
-    assert_eq!(reg.data().unwrap().nsamp, 60000);
+    assert_eq!(reg.data().unwrap().nsamp, 60);
 }
 
 #[test]

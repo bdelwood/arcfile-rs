@@ -23,12 +23,12 @@ You'll need the Rust toolchain for the core library, plus the following for the 
 
 Build the MEX binary:
 ```bash
-cargo build --release -p arcfile-matlab
+cargo build --release -p arcfile-mex
 ```
 
 Make it available to your MATLAB instance, e.g. by symlinking into a directory on your MATLAB path:
 ```bash
-ln -sf $(realpath target/release/libarcfile_matlab.so) $MATLABPATH/readarc_rs.mexa64
+ln -sf $(realpath target/release/libarcfile_mex.so) $MATLABPATH/readarc_rs.mexa64
 ```
 
 ### Python bindings
@@ -60,7 +60,7 @@ podman run --rm \
     -v $MATLABROOT:/opt/matlab:ro \
     -w /src \
     ghcr.io/bdelwood/arcfile-rs-build:latest \
-    cargo build --release -p arcfile-matlab
+    cargo build --release -p arcfile-mex
 ```
 where `$MATLABROOT` is the output of running `matlabroot` from MATLAB.
 
@@ -73,7 +73,7 @@ singularity run \
     --bind "$PWD:/src" \
     --bind $MATLABROOT:/opt/matlab:ro \
     docker://ghcr.io/bdelwood/arcfile-rs-build:latest \
-    bash -lc 'cd /src && cargo build --release -p arcfile-matlab'
+    bash -lc 'cd /src && cargo build --release -p arcfile-mex'
 ```
 
 For the Python wheels, change the container command to `bash -lc 'cd /src && uv build --wheel py/'`.

@@ -1,5 +1,5 @@
-use arcfile_rs::arcfile::ArcFileLoader;
-use arcfile_rs::register::{RegData, RegValues};
+use arcfile_core::arcfile::ArcFileLoader;
+use arcfile_core::register::{RegData, RegValues};
 use jiff::Timestamp;
 use log::{debug, info};
 use numpy::PyArray1;

@@ -55,7 +55,7 @@ jobs:
 
       - name: Run tests
         # TODO: enable integration tests when mock arcfile is added to repo
-        run: cargo test --release --lib --workspace --exclude arcfile-matlab
+        run: cargo test --release --lib --workspace --exclude arcfile-mex
 
   python-tests:
     name: Run Python tests

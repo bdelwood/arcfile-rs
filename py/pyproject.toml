@@ -1,5 +1,5 @@
 [project]
-name = "arcfile_rs"
+name = "arcfile"
 version = "0.1.0"
 description = "Python bindings for arcfile_rs"
 readme = "README.md"
@@ -27,3 +27,4 @@ build-backend = "maturin"
 [tool.maturin]
 bindings = "pyo3"
 features = ["pyo3/extension-module"]
+module-name = "arcfile"

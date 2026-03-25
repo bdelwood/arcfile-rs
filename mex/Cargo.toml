@@ -1,5 +1,5 @@
 [package]
-name = "arcfile-matlab"
+name = "arcfile-mex"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,7 +11,7 @@ repository.workspace = true
 crate-type = ["cdylib"]
 
 [dependencies]
-arcfile-rs = { path = "../core" }
+arcfile_core = { package = 'arcfile', path = "../core" }
 rustmex = { git = 'https://gitlab.com/bdelwood/rustmex', version = "0.6.3", features = [
     "matlab800",
 ] }

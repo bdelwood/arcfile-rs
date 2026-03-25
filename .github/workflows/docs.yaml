@@ -31,7 +31,7 @@ jobs:
           toolchain: stable
 
       - name: Generate Rust docs
-        run: cargo doc --no-deps --package arcfile-rs
+        run: cargo doc --no-deps --package arcfile
 
       - name: Adjust documentation for GitHub Pages hosting
         run: echo '<meta http-equiv="refresh" content="0;url=arcfile_rs/index.html">' > target/doc/index.html

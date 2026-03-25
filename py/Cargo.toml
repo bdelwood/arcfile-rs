@@ -8,11 +8,11 @@ license.workspace = true
 repository.workspace = true
 
 [lib]
-name = "arcfile"
+name = "arcfile_py"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-arcfile-rs = { path = "../core" }
+arcfile_core = { package = 'arcfile', path = "../core" }
 numpy = "0.28.0"
 pyo3 = { version = "0.28.2", features = ["extension-module", "abi3-py310"] }
 pyo3-log = "0.13.3"

@@ -5,8 +5,8 @@ use rustmex::numeric::Numeric;
 use rustmex::prelude::*;
 use std::path::PathBuf;
 
-use arcfile_rs::arcfile::ArcFileLoader;
-use arcfile_rs::register::{RegData, RegValues};
+use arcfile_core::arcfile::ArcFileLoader;
+use arcfile_core::register::{RegData, RegValues};
 use rustmex::MatlabClass;
 use rustmex::cell::CellArray;
 use rustmex::char::CharArray;
