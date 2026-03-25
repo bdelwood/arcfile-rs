@@ -211,15 +211,17 @@ impl TryFrom<&Path> for FileType {
     type Error = ArcError;
 
     fn try_from(path: &Path) -> Result<Self, Self::Error> {
-        let ext = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .ok_or(ArcError::Format("Missing file extension.".to_string()))?;
+        let ext = path.extension().and_then(|e| e.to_str()).ok_or_else(|| {
+            ArcError::Format(format!("missing file extension: \"{}\"", path.display()))
+        })?;
         match ext {
             "gz" => Ok(Self::Gzip),
             "bz2" => Ok(Self::Bzip2),
             "dat" => Ok(Self::Plain),
-            _ => Err(ArcError::Format(format!("Unknown file format: {ext}"))),
+            _ => Err(ArcError::Format(format!(
+                "unknown extension .{ext}: \"{}\"",
+                path.display()
+            ))),
         }
     }
 }
@@ -406,6 +408,9 @@ pub struct ArcFileLoader {
 
 impl ArcFileLoader {
     pub fn new(timerange: RangeInclusive<Timestamp>, filters: &[&str]) -> ArcResult<Self> {
+        if timerange.start() > timerange.end() {
+            return Err(ArcError::Format("start time is after end time".into()));
+        }
         let filters: Vec<FilterSpec> = filters
             .iter()
             .map(|f| f.parse())
@@ -419,17 +424,26 @@ impl ArcFileLoader {
         // flatten paths
         let paths: Vec<PathBuf> = paths
             .iter()
-            .flat_map(|p| {
+            .map(|p| {
+                // if the directory/path doesn't exist, error out
+                if !p.exists() {
+                    return Err(ArcError::Io(std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        format!("path does not exist: {}", p.display()),
+                    )));
+                }
                 // if directory, list and sort, trim to within timerange
                 if p.is_dir() {
-                    list_and_sort(p, &self.timerange).unwrap_or_default()
+                    list_and_sort(p, &self.timerange)
 
                 // otherwise, for individual files, just stuff into Vec
-                // TODO: should trim on timerange here too
                 } else {
-                    vec![p.clone()]
+                    Ok(vec![p.clone()])
                 }
             })
+            .collect::<ArcResult<Vec<_>>>()?
+            .into_iter()
+            .flatten()
             .collect();
 
         debug!(

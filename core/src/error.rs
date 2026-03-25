@@ -8,7 +8,7 @@ pub enum ArcError {
     #[error(transparent)]
     Utf8(#[from] std::string::FromUtf8Error),
 
-    #[error("Unknown format for file: {0}")]
+    #[error("{0}")]
     Format(String),
 
     #[error("Unknown register: {0}")]
