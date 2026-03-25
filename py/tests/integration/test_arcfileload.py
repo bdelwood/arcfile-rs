@@ -1,10 +1,10 @@
 import logging
+import os
 
 import pytest
+from datetime import datetime, timezone
 
 from arcfile import ArcFile
-from datetime import datetime, timezone
-import os
 
 
 try:
@@ -20,7 +20,6 @@ logging.basicConfig(level=logging.DEBUG)
 @pytest.fixture()
 def load():
     def _load(t1=None, t2=None, filters=None):
-
         return ArcFile.load(TEST_DIR, t1, t2, filters)
 
     return _load
@@ -60,7 +59,7 @@ def test_load_with_filter(load):
     af = load(None, None, [filt_wildcard])
     assert len(af) == 4
     af = af.to_dict()
-    assert all([key.startswith("mce") for key in af.keys()])
+    assert all(key.startswith("mce") for key in af.keys())
 
     # now check chsel works
     af = load(None, None, [filt_chsel])
@@ -69,40 +68,61 @@ def test_load_with_filter(load):
     for key in filt_chsel.split("."):
         value = value[key.split("[", 1)[0]]
         assert value is not None
-    assert value.shape == (60000,)
+    assert value.shape == (60,)
 
     # repeat channels in filter should be deduped
     af = load(None, None, [filt_chsel_repeat])
-    value = af
     assert len(af) == 1
+    value = af
     for key in filt_chsel_repeat.split("."):
         value = value[key.split("[", 1)[0]]
         assert value is not None
-    assert value.shape == (60000, 2)
+    assert value.shape == (60, 2)
+
+
+def test_load_with_filter_exclusion(load):
+    # first-match: err[] excludes err, * includes everything else
+    af = load(None, None, ["mce*.data.err[]", "*"])
+    assert len(af) > 0
+    assert "err" not in af["mce0"]["data"].keys()
+    assert af["mce0"]["data"]["fb"] is not None
+    assert len(af["mce0"]["data"]["fb"]) > 0
+
+    # channel selection with exclusion: err excluded, fb gets 5 channels, rest gets all
+    af = load(None, None, ["mce*.data.err[]", "mce0.data.fb[0:4]", "*"])
+    assert "err" not in af["mce0"]["data"].keys()
+    fb = af["mce0"]["data"]["fb"]
+    assert fb.shape[1] == 5  # channels 0,1,2,3,4
+    assert af["array"]["frame"]["utc"] is not None
 
 
 def test_load_with_single_time_bound(load):
     tearly = parse_iso("2000-01-01T00:00:00Z")
     tlate = parse_iso("2099-01-01T00:00:00Z")
 
-    # start time bound
-    # both should not be empty
-    # empty dict in Python is falsy
+    # start time bound: file is in range
     af = load(tearly, None, None)
     assert af.to_dict()
-    af = load(tlate, None, None)
-    assert af.to_dict()
 
-    # end time bound
+    # start time bound: file too far in past, returns empty
+    af = load(tlate, None, None)
+    assert not af.to_dict()
+
+    # end time bound: file is in range
     af = load(None, tlate, None)
     assert af.to_dict()
 
+    # start > end should error
     with pytest.raises(OSError):
-        af = load(None, tearly, None)
+        load(
+            parse_iso("2026-01-01T00:00:00Z"),
+            parse_iso("2000-01-01T00:00:00Z"),
+            None,
+        )
 
 
 def test_load_with_both_bounds(load):
-    t1 = parse_iso("2020-01-01T00:00:00Z")
+    t1 = parse_iso("2018-01-01T00:00:00Z")
     t2 = parse_iso("2050-01-02T00:00:00Z")
     af = load(t1, t2, None)
 
@@ -117,15 +137,38 @@ def test_load_with_both_bounds(load):
 
 
 def test_load_with_both_bounds_and_filter(load):
-    t1 = parse_iso("2024-01-01T00:00:00Z")
-    t2 = parse_iso("2024-01-02T00:00:00Z")
-    filters = ["mce0.data.fb[0:5]"]
+    # out-of-range times: returns empty, not error
+    af = load(
+        parse_iso("2024-01-01T00:00:00Z"),
+        parse_iso("2024-01-02T00:00:00Z"),
+        ["mce0.data.fb[0:5]"],
+    )
+    assert not af.to_dict()
 
-    # should pick up one file from "one-file-before" behavior
-    af = load(t1, t2, filters)
+    af = load(
+        parse_iso("2018-01-01T00:00:00Z"),
+        parse_iso("2024-01-02T00:00:00Z"),
+        ["mce0.data.fb[0:5]"],
+    )
 
     (nsamp, nchan) = af["mce0"]["data"]["fb"].shape
-
-    # should only have 6 channels, 0:5
     assert nsamp > 0
     assert nchan == 6
+
+
+def test_load_out_of_range_returns_empty(load):
+    # dates far in the past: no files match, returns empty
+    af = load(
+        parse_iso("2000-01-01T00:00:00Z"),
+        parse_iso("2000-01-02T00:00:00Z"),
+        None,
+    )
+    assert not af.to_dict()
+
+    # dates far in the future: same
+    af = load(
+        parse_iso("2099-01-01T00:00:00Z"),
+        parse_iso("2099-01-02T00:00:00Z"),
+        None,
+    )
+    assert not af.to_dict()

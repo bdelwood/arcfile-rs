@@ -74,29 +74,55 @@ fn load_with_filter() {
 }
 
 #[test]
+fn load_with_filter_exclusion() {
+    // Test first-match: err[] excludes err, * includes everything else
+    let af = arcloader_fixture(None, None, &["mce*.data.err[]", "*"]).unwrap();
+    assert!(!af.registers.is_empty());
+    // err should be excluded
+    assert!(af.get("mce0.data.err").is_err());
+    // fb should still be present
+    assert!(af.get("mce0.data.fb").is_ok());
+    assert!(af.get("mce0.data.fb").unwrap().data().unwrap().nsamp > 0);
+
+    // Channel selection with exclusion: err excluded, fb gets 5 channels, rest gets all
+    let af = arcloader_fixture(None, None, &["mce*.data.err[]", "mce0.data.fb[0:4]", "*"]).unwrap();
+    assert!(af.get("mce0.data.err").is_err());
+    let fb = af.get("mce0.data.fb").unwrap();
+    assert_eq!(fb.data().unwrap().nchan, 5); // channels 0,1,2,3,4
+    // other registers should have all channels
+    assert!(af.get("array.frame.utc").is_ok());
+}
+
+#[test]
 fn load_with_single_time_bound() {
-    let tearly = Some("2099-01-01T00:00:00Z");
-    let tlate = Some("2000-01-01T00:00:00Z");
+    let tearly = Some("2000-01-01T00:00:00Z");
+    let tlate = Some("2099-01-01T00:00:00Z");
 
-    // start time bound
+    // start time bound: file is in range
     let af = arcloader_fixture(tearly, None, &[]).unwrap();
-    // we intentionally find 1 file before
-    assert!(!af.registers.is_empty());
-    let af = arcloader_fixture(tlate, None, &[]).unwrap();
     assert!(!af.registers.is_empty());
 
-    // end time bound
+    // start time bound: file too far in past, returns empty
+    let af = arcloader_fixture(tlate, None, &[]).unwrap();
+    assert!(af.registers.is_empty());
+
+    // end time bound: file is in range
     let af = arcloader_fixture(None, Some("2099-01-01T00:00:00Z"), &[]).unwrap();
     assert!(!af.registers.is_empty());
-    // this should actually error, since start > end
-    let result = arcloader_fixture(None, Some("2000-01-01T00:00:00Z"), &[]);
+
+    // start > end should error
+    let result = arcloader_fixture(
+        Some("2026-01-01T00:00:00Z"),
+        Some("2000-01-01T00:00:00Z"),
+        &[],
+    );
     assert!(matches!(result, Err(ArcError::Format(_))));
 }
 
 #[test]
 fn load_with_both_bounds() {
     let af = arcloader_fixture(
-        Some("2020-01-01T00:00:00Z"),
+        Some("2018-01-01T00:00:00Z"),
         Some("2050-01-02T00:00:00Z"),
         &[],
     )
@@ -115,14 +141,22 @@ fn load_with_both_bounds() {
 
 #[test]
 fn load_with_both_bounds_and_filter() {
+    // out-of-range times
+    //  returns empty, not error
     let af = arcloader_fixture(
         Some("2024-01-01T00:00:00Z"),
         Some("2024-01-02T00:00:00Z"),
         &["mce0.data.fb[0:5]"],
     )
     .unwrap();
+    assert!(af.registers.is_empty());
 
-    assert_eq!(af.registers.len(), 1);
+    let af = arcloader_fixture(
+        Some("2018-01-01T00:00:00Z"),
+        Some("2024-01-02T00:00:00Z"),
+        &["mce0.data.fb[0:5]"],
+    )
+    .unwrap();
 
     let reg = af.get("mce0.data.fb").unwrap();
     let data = reg.data().unwrap();
@@ -139,8 +173,30 @@ fn load_with_bad_filter() {
     // should raise error because of missing ]
     let af = arcloader_fixture(None, None, &[filt_bad_format]);
     assert!(matches!(af, Err(ArcError::InvalidInput(_))));
+
     // should raise error for nonsensical detector range
     let af = arcloader_fixture(None, None, &[filt_out_of_order]);
-
     assert!(matches!(af, Err(ArcError::InvalidInput(_))));
+}
+
+#[test]
+fn load_out_of_range_returns_empty() {
+    // dates far in the past
+    // no files match, should return empty, not error
+    let af = arcloader_fixture(
+        Some("2000-01-01T00:00:00Z"),
+        Some("2000-01-02T00:00:00Z"),
+        &[],
+    )
+    .unwrap();
+    assert!(af.registers.is_empty());
+
+    // dates far in the future, same as above
+    let af = arcloader_fixture(
+        Some("2099-01-01T00:00:00Z"),
+        Some("2099-01-02T00:00:00Z"),
+        &[],
+    )
+    .unwrap();
+    assert!(af.registers.is_empty());
 }
