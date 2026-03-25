@@ -3,7 +3,7 @@ use crate::register::{Buffer, RegData, RegValues};
 use crate::regmap::{Endianness, RegBlockSpec, parse_regmap};
 use bzip2::read::BzDecoder;
 use flate2::read::GzDecoder;
-use jiff::{Timestamp, civil::DateTime, tz::TimeZone};
+use jiff::{Timestamp, ToSpan, civil::DateTime, tz::TimeZone};
 use log::{debug, info, trace};
 use rayon::prelude::*;
 use std::collections::{BTreeMap, HashMap};
@@ -345,21 +345,30 @@ pub fn list_and_sort(path: &Path, range: &RangeInclusive<Timestamp>) -> ArcResul
     let mut entries: Vec<_> = fs::read_dir(path)?
         .filter_map(|res| {
             // Handle any DirEntries that are Err
-            let path = res.ok()?;
-            let entry = &path.file_name();
-            let name = entry.to_str()?;
+            let path = res.ok()?.path();
+            let name = path.file_name()?.to_str()?;
             // Filter out any files that aren't arcfiles (w/o .dat)
-            let time = if name.contains(".dat") {
-                // Skip any files that fail the date parser
-                parse_date_arcfile(name).or_else(|| {
+            if !name.contains(".dat") {
+                return None;
+            }
+            // skip files with unknown extensions
+            if FileType::try_from(path.as_path()).is_err() {
+                return None;
+            }
+
+            // parse date from filename
+            let time = DateTime::strptime("%Y%m%d_%H%M%S", path.file_prefix()?.to_str()?)
+                .ok()
+                // if datetime conversion worked, convert to timestamp
+                .and_then(|dt| TimeZone::UTC.to_timestamp(dt).ok())
+                // if conversion fails, skip by returning None to filter_map
+                .or_else(|| {
                     trace!("Skipping {:?}", name);
                     None
-                })
-            } else {
-                None
-            }?;
+                })?;
+
             // Map to timestamp, pathbuf tuple
-            Some((time, path.path()))
+            Some((time, path))
         })
         .collect();
 
@@ -367,11 +376,13 @@ pub fn list_and_sort(path: &Path, range: &RangeInclusive<Timestamp>) -> ArcResul
     entries.sort_by_key(|(t, _)| *t);
 
     // Get the first file before the time range
+    // exclude if over a day ago
+    // Matches C impl, `fileset.c`, line 175
     // find stops at first
     let pre: Option<PathBuf> = entries
         .iter()
         .rev()
-        .find(|(t, _)| t < range.start())
+        .find(|(t, _)| (t < range.start()) && (*t > *range.start() - 24.hours()))
         .map(|(_, p)| p.clone());
 
     // Exclude any files outside of requested date range
@@ -386,14 +397,6 @@ pub fn list_and_sort(path: &Path, range: &RangeInclusive<Timestamp>) -> ArcResul
         .collect();
 
     Ok(fis)
-}
-
-// TODO: refactor to make this unnecessary--we should use OsStr's file_prefix
-fn parse_date_arcfile(name: &str) -> Option<Timestamp> {
-    // Get date as file prefix
-    let date_str = name.split('.').next().unwrap();
-    let time = DateTime::strptime("%Y%m%d_%H%M%S", date_str).ok()?;
-    TimeZone::UTC.to_timestamp(time).ok()
 }
 
 // Nested map to represent arcfile hierarchy
@@ -756,12 +759,15 @@ mod test {
         let dir = tempfile::tempdir().unwrap();
 
         // create empty files with arcfile-style names
+        // intentionally out of order
         let names = [
+            "20240103_000000.dat",
             "20240101_000000.dat",
             "20240102_120000.dat",
-            "20240103_000000.dat",
+            "20240102_000000.dat",
             "20240104_000000.dat",
-            "readme.txt", // should be ignored
+            "readme.txt",              // should be ignored
+            "20240104_000000.dat.zip", // should also be ignored
         ];
         for name in &names {
             std::fs::File::create(dir.path().join(name)).unwrap();
@@ -779,8 +785,10 @@ mod test {
             .filter_map(|p| p.file_name()?.to_str())
             .collect();
 
-        // Jan 1 is before range but included as the "pre" file
-        assert!(stems.contains(&"20240101_000000.dat"));
+        // Jan 1 is before range and excluded because it's over a day before
+        assert!(!stems.contains(&"20240101_000000.dat"));
+        // Jan 2 midnight is before range and is incldued as the "pre" file
+        assert!(stems.contains(&"20240102_000000.dat"));
         // Jan 2 and 3 are in range
         assert!(stems.contains(&"20240102_120000.dat"));
         assert!(stems.contains(&"20240103_000000.dat"));
@@ -788,6 +796,7 @@ mod test {
         assert!(!stems.contains(&"20240104_000000.dat"));
         // non-arcfiles excluded
         assert!(!stems.contains(&"readme.txt"));
+        assert!(!stems.contains(&"20240104_000000.dat.zip"));
     }
 
     #[test]
