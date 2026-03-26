@@ -215,8 +215,13 @@ trait ToMex {
 
 impl ToMex for RegData<RegValues> {
     fn into_mex(self) -> rustmex::Result<MxArray> {
-        let nchan = self.nchan;
         let nsamp = self.nsamp;
+        let nchan = if nsamp != 0 {
+            self.nchan
+        // mimics C behavior where empty registers return [0,0] sized arrays
+        } else {
+            0
+        };
 
         macro_rules! make_numeric {
             ($v:expr) => {{

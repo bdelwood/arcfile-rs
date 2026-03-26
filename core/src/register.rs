@@ -47,7 +47,7 @@ impl RegData<Buffer> {
             nsamp: 0,
             reg_type,
             storage: Buffer {
-                data: RegValues::zeroed(reg_type, nframes_est * spf * nchan.max(1)),
+                data: RegValues::zeroed(reg_type, nframes_est * spf * nchan),
                 spf,
                 elem_size,
                 reg_ofs: spec.ofs,
@@ -93,7 +93,7 @@ impl RegData<Buffer> {
     /// and to copy the behavior of the C implementation's `dataset_resize`
     fn grow(&mut self) {
         let buffer = &mut self.storage;
-        let nchan = self.nchan.max(1);
+        let nchan = self.nchan;
         let old_spc = buffer.nframes_capacity * buffer.spf;
         // set reasonable maximum
         let new_spc = ((buffer.nframes_capacity * 2).max(64)) * buffer.spf;
@@ -110,7 +110,7 @@ impl RegData<Buffer> {
     /// trim to actual size.
     pub(crate) fn finish(self) -> RegData<RegValues> {
         let buffer = self.storage;
-        let nchan = self.nchan.max(1);
+        let nchan = self.nchan;
         let nsamp = self.nsamp;
 
         // If buffer is larger than the actual number of frames:
@@ -155,24 +155,16 @@ impl RegData<RegValues> {
     pub(crate) fn concatenate(parts: Vec<Self>) -> Self {
         assert!(!parts.is_empty());
         let nchan = parts[0].nchan;
-        let nchan_max = nchan.max(1);
         let reg_type = parts[0].reg_type;
         let total_spc: usize = parts.iter().map(|p| p.nsamp).sum();
 
         let rt = parts[0].storage.reg_type();
-        let mut out = RegValues::zeroed(rt, total_spc * nchan_max);
+        let mut out = RegValues::zeroed(rt, total_spc * nchan);
         let mut cursor: usize = 0;
 
         for part in &parts {
             let part_spc = part.nsamp;
-            out.copy_channels_from(
-                &part.storage,
-                nchan_max,
-                part_spc,
-                total_spc,
-                part_spc,
-                cursor,
-            );
+            out.copy_channels_from(&part.storage, nchan, part_spc, total_spc, part_spc, cursor);
             cursor += part_spc;
         }
 

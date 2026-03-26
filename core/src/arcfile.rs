@@ -515,8 +515,6 @@ impl ArcFile {
         // Determine which registers to load and pre-allocate output buffers.
         let mut archived: Vec<(RegBlockSpec, RegData<Buffer>)> = regs
             .into_iter()
-            // skip any registers marked as not archived
-            .filter(|spec| spec.do_arc())
             // skip registers not matched by user provided filter
             // NB: C implementation's channel/filter selection is "first match"
             // which admits functionality like excluding sets of detectors, eg
@@ -539,7 +537,7 @@ impl ArcFile {
                     // no filters matched
                     None => return None,
                     // [] exclusion (ie empty set)
-                    Some(Some(ch)) if ch.is_empty() => return None,
+                    Some(None) => None,
                     Some(ch) => ch,
                 };
 
@@ -573,8 +571,15 @@ impl ArcFile {
                 let frame =
                     &chunk_buf[frame_idx * header.frame_len..(frame_idx + 1) * header.frame_len];
 
-                for (_, reg_data) in archived.iter_mut() {
-                    reg_data.scatter_frame(frame);
+                // skip actually allocating for any registers marked as not archived
+                // the registers will be present in the output, but empty
+
+                // Here, these empty registers have the correct dimensions as given by the register map.
+                // The C MEX bindings return these to Matlab as [0,0] empty arrays. We'll do that too in the MEX binding crate.
+                for (spec, reg_data) in archived.iter_mut() {
+                    if spec.do_arc() {
+                        reg_data.scatter_frame(frame);
+                    }
                 }
             }
 
