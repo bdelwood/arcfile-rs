@@ -154,6 +154,7 @@ impl From<RegType> for u32 {
     fn from(reg_type: RegType) -> Self {
         match reg_type {
             RegType::Utc => 0x200,
+            // included for completeness, but the C implementation effectively ignores this in `mex_readarc`, line 165
             RegType::Bool => 0x800,
             RegType::Char => 0x1000,
             RegType::UChar => 0x2000,

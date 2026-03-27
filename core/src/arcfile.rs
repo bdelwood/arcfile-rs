@@ -3,10 +3,10 @@ use crate::register::{Buffer, RegData, RegValues};
 use crate::regmap::{Endianness, RegBlockSpec, parse_regmap};
 use bzip2::read::BzDecoder;
 use flate2::read::GzDecoder;
+use indexmap::IndexMap;
 use jiff::{Timestamp, ToSpan, civil::DateTime, tz::TimeZone};
 use log::{debug, info, trace};
 use rayon::prelude::*;
-use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom};
@@ -32,7 +32,7 @@ pub struct ArcHeader {
 #[derive(Default)]
 pub struct ArcFile {
     pub header: ArcHeader,
-    pub registers: HashMap<String, Register>,
+    pub registers: IndexMap<String, Register>,
 }
 
 pub struct Register {
@@ -415,7 +415,7 @@ pub fn list_and_sort(path: &Path, range: &RangeInclusive<Timestamp>) -> ArcResul
 }
 
 // Nested map to represent arcfile hierarchy
-type RegisterTree = BTreeMap<String, BTreeMap<String, BTreeMap<String, RegData<RegValues>>>>;
+type RegisterTree = IndexMap<String, IndexMap<String, IndexMap<String, RegData<RegValues>>>>;
 
 /// Loader for ArcFiles
 /// Keeps track of requested filters and file search time range
@@ -606,9 +606,9 @@ impl ArcFile {
             t2.elapsed().as_secs_f64()
         );
         let t3 = std::time::Instant::now();
-        // throw everything into a hashmap
+        // throw everything into an indexmap
         // keys=register full name, values=Register struct (spec+data)
-        let registers: HashMap<String, Register> = archived
+        let registers: IndexMap<String, Register> = archived
             .into_iter()
             .map(|(spec, buffer)| {
                 (
@@ -637,10 +637,10 @@ impl ArcFile {
     /// Data is already unpacked
     /// This should just reorganize ownership.
     pub fn into_tree(&mut self) -> RegisterTree {
-        // Build nested BTreeMap
+        // Build nested IndexMap
         let mut root = RegisterTree::new();
 
-        // Loop over register hashmap items
+        // Loop over register indexmap items
         for (name, reg) in self.registers.iter_mut() {
             let parts: Vec<&str> = name.split('.').collect();
             // ignore registers which don't have map.board.block
@@ -649,7 +649,7 @@ impl ArcFile {
                 continue;
             }
 
-            // extract actual data and build nested BTreeMap
+            // extract actual data and build nested IndexMap
             if let Some(data) = reg.data.take() {
                 root.entry(parts[0].to_string())
                     .or_default()
@@ -714,9 +714,9 @@ impl ArcFile {
             .collect();
 
         // do actual concatenation
-        // by stuffing virtual arcfile into Hashmap
+        // by stuffing virtual arcfile into IndexMap
         // we've got rayon in scope, might as well use it
-        let registers: HashMap<String, Register> = parts_by_reg
+        let registers: IndexMap<String, Register> = parts_by_reg
             .into_par_iter()
             .map(|(name, spec, parts)| {
                 let data = if parts.len() == 1 {
@@ -852,8 +852,8 @@ mod test {
     #[test]
     fn concatenate_single_file_returns_as_is() {
         // build a minimal ArcFile with one register
-        // Mock hashmap and spec
-        let mut registers = HashMap::new();
+        // Mock indexmap and spec
+        let mut registers = IndexMap::new();
         let tw = 0x2000 | 0x20000C;
         let spec = RegBlockSpec::new(
             "t".into(),
