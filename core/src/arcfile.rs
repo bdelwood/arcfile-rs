@@ -315,31 +315,44 @@ fn estimate_nframes(path: &Path, header: &ArcHeader) -> usize {
         return CHUNK_FRAMES;
     }
 
-    // gzip
-    // extract from the uncompressed size in the trailer
-    if path.extension().is_some_and(|e| e == "gz") {
-        if let Some(size) = gz_uncompressed_size(path)
-            && size > header.frame0_ofs
-        {
-            return (size - header.frame0_ofs) / header.frame_len;
-        }
-        return CHUNK_FRAMES;
-    }
-
-    // plain or bz2
-    // estimate from file size
+    // file information
     let fsize = fs::metadata(path).map(|m| m.len() as usize).unwrap_or(0);
-    if fsize <= header.frame0_ofs {
-        return CHUNK_FRAMES;
-    }
-    let estimate = (fsize - header.frame0_ofs) / header.frame_len;
+    let ext = path.extension().and_then(|f| f.to_str());
 
-    // bz2 has no size trailer
-    // scale by some ad hoc compression ratio
-    if path.extension().is_some_and(|e| e == "bz2") {
-        estimate * 6
-    } else {
-        estimate
+    match ext {
+        Some("gz") => {
+            if fsize > u32::MAX as usize / 4 {
+                return 3000;
+            };
+            // The gzip trailer stores uncompressed size as u32, so it wraps
+            // at 4 GiB. With typical ~25% compression ratio, compressed files
+            // over ~1 GiB likely have wrapped trailers. Fall back to 3000
+            // frames (the typical count for larger BK arcfiles).
+            if let Some(size) = gz_uncompressed_size(path)
+                && size > header.frame0_ofs
+            {
+                return (size - header.frame0_ofs) / header.frame_len;
+            }
+            CHUNK_FRAMES
+        }
+        // plain or bz2 estimate just off file size
+        Some("bz2") => {
+            if fsize <= header.frame0_ofs {
+                CHUNK_FRAMES
+            // bz2 has no uncompressed size trailer; estimate from
+            // compressed size with an ad hoc 4x ratio.
+            } else {
+                (fsize - header.frame0_ofs) / header.frame_len * 4
+            }
+        }
+        _ => {
+            // plain arcfiles will be exact
+            if fsize <= header.frame0_ofs {
+                CHUNK_FRAMES
+            } else {
+                (fsize - header.frame0_ofs) / header.frame_len
+            }
+        }
     }
 }
 
