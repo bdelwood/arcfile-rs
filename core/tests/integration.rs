@@ -75,20 +75,26 @@ fn load_with_filter() {
 
 #[test]
 fn load_with_filter_exclusion() {
-    // Test first-match: err[] excludes err, * includes everything else
+    // Test first-match: err[] excludes err channels, * includes everything else
     let af = arcloader_fixture(None, None, &["mce*.data.err[]", "*"]).unwrap();
     assert!(!af.registers.is_empty());
-    // err should be excluded
-    assert!(af.get("mce0.data.err").is_err());
-    // fb should still be present
-    assert!(af.get("mce0.data.fb").is_ok());
-    assert!(af.get("mce0.data.fb").unwrap().data().unwrap().nsamp > 0);
 
-    // Channel selection with exclusion: err excluded, fb gets 5 channels, rest gets all
+    // err should be present but with zero channels (empty [] = no columns)
+    let err = af.get("mce0.data.err").unwrap();
+    assert_eq!(err.data().unwrap().nchan, 0);
+
+    // fb should still be present with data
+    let fb = af.get("mce0.data.fb").unwrap();
+    assert!(fb.data().unwrap().nsamp > 0);
+
+    // Channel selection with exclusion: err gets 0 channels, fb gets 5, rest gets all
     let af = arcloader_fixture(None, None, &["mce*.data.err[]", "mce0.data.fb[0:4]", "*"]).unwrap();
-    assert!(af.get("mce0.data.err").is_err());
+    let err = af.get("mce0.data.err").unwrap();
+    assert_eq!(err.data().unwrap().nchan, 0);
+
     let fb = af.get("mce0.data.fb").unwrap();
     assert_eq!(fb.data().unwrap().nchan, 5); // channels 0,1,2,3,4
+
     // other registers should have all channels
     assert!(af.get("array.frame.utc").is_ok());
 }
