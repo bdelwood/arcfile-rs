@@ -22,7 +22,7 @@ use jiff::{Timestamp, civil::DateTime, tz::TimeZone};
 use log::{debug, info, trace};
 use logging::init_logger;
 
-#[rustmex::entrypoint(catch_panic)]
+#[rustmex::entrypoint]
 fn readarc_rs(lhs: Lhs, rhs: Rhs) -> rustmex::Result<()> {
     init_logger();
     debug!("readarc_rs called");

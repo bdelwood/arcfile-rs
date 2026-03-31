@@ -815,7 +815,7 @@ mod test {
 
         // Jan 1 is before range and excluded because it's over a day before
         assert!(!stems.contains(&"20240101_000000.dat"));
-        // Jan 2 midnight is before range and is incldued as the "pre" file
+        // Jan 2 midnight is before range and is included as the "pre" file
         assert!(stems.contains(&"20240102_000000.dat"));
         // Jan 2 and 3 are in range
         assert!(stems.contains(&"20240102_120000.dat"));

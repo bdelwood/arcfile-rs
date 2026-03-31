@@ -242,6 +242,8 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-*.dat.gz
-
 .python-version
+
+# data files
+*.dat.gz
+assets/
