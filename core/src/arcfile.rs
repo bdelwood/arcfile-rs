@@ -1,3 +1,4 @@
+use crate::MAX_RAYON_THREADS;
 use crate::error::{ArcError, ArcResult};
 use crate::register::{Buffer, RegData, RegValues};
 use crate::regmap::{Endianness, RegBlockSpec, parse_regmap};
@@ -437,6 +438,13 @@ impl ArcFileLoader {
     }
 
     pub fn load(&self, paths: &[PathBuf]) -> ArcResult<ArcFile> {
+        // configure rayon
+        // errors out on repeated calls in same process,
+        // so just convert to Option and ignore error
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(MAX_RAYON_THREADS)
+            .build_global()
+            .ok();
         let t0 = std::time::Instant::now();
 
         // flatten paths

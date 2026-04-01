@@ -4,3 +4,5 @@ pub mod arcfile;
 pub mod error;
 pub mod register;
 pub mod regmap;
+
+pub const MAX_RAYON_THREADS: usize = 12;
